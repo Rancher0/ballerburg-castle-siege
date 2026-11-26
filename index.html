@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1d2a3a">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Ballerburg 3D</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<!-- Hauptmenü -->
+<section id="menu" class="screen">
+  <div class="panel menu-panel">
+    <h1>Ballerburg <span>3D</span></h1>
+    <p class="sub">Burgenduell mit Kanone, Katapult und Mörser</p>
+    <button class="big" data-act="start-ai">⚔️ Gegen den Computer</button>
+    <div class="chips" id="diff">
+      <button data-diff="leicht">Leicht</button><button data-diff="mittel">Mittel</button><button data-diff="schwer">Schwer</button>
+    </div>
+    <button class="big alt" data-act="start-hot">👥 Zwei Spieler (ein Gerät)</button>
+    <div class="row">
+      <button data-act="settings">⚙️ Einstellungen</button>
+      <button data-act="help">❓ Anleitung</button>
+    </div>
+    <p class="tiny">Prototyp · Fan-Projekt · läuft offline im Browser</p>
+  </div>
+</section>
+
+<!-- Spiel-HUD -->
+<section id="hud" class="hidden">
+  <div class="topbar">
+    <div class="pl pl0"><b id="n0">Du</b><span id="g0">💰 0</span><i class="bar"><em id="i0"></em></i></div>
+    <div class="mid">
+      <div id="turnText">Du bist dran</div>
+      <div class="wind"><span>Wind</span><b id="windArrow">➤</b><span id="windVal">0</span></div>
+    </div>
+    <div class="pl pl1"><b id="n1">Computer</b><span id="g1">💰 0</span><i class="bar"><em id="i1"></em></i></div>
+    <div class="tbtns"><button id="camBtn" title="Kamera">🎥</button><button id="pauseBtn" title="Pause">⏸</button></div>
+  </div>
+  <div id="line" class="line hidden"></div>
+  <div id="toast" class="toast hidden"></div>
+
+  <div id="weapons" class="weapons"></div>
+
+  <div id="aimPanel" class="aim">
+    <div class="vals"><span>Winkel <b id="vElev">0°</b></span><span>Seite <b id="vYaw">0°</b></span><span>Kraft <b id="vPow">0%</b></span></div>
+    <div class="aimrow">
+      <div class="fine">
+        <button data-n="e+" class="f up">▲</button>
+        <div class="lr"><button data-n="y-">◀</button><button data-n="y+">▶</button></div>
+        <button data-n="e-" class="f">▼</button>
+      </div>
+      <div id="pad" class="pad"><div class="ring"></div><div id="knob" class="knob"></div><small>Ziehen zum Zielen</small></div>
+      <div class="power">
+        <button data-n="p+">＋</button>
+        <div id="powTrack" class="track"><div id="powFill" class="fill"></div><small>Kraft</small></div>
+        <button data-n="p-">－</button>
+      </div>
+      <button id="fireBtn" class="fire">FEUER!</button>
+    </div>
+  </div>
+</section>
+
+<!-- Overlays -->
+<section id="pause" class="screen hidden"><div class="panel">
+  <h2>Pause</h2>
+  <button class="big" data-act="resume">▶ Weiter</button>
+  <button data-act="settings">⚙️ Einstellungen</button>
+  <button data-act="help">❓ Anleitung</button>
+  <button data-act="quit">🏳️ Aufgeben / Hauptmenü</button>
+</div></section>
+
+<section id="settings" class="screen hidden"><div class="panel">
+  <h2>Einstellungen</h2>
+  <label>Grafik<span class="chips" data-set="quality"><button data-v="niedrig">Niedrig</button><button data-v="mittel">Mittel</button><button data-v="hoch">Hoch</button></span></label>
+  <label>Ziel-Empfindlichkeit <b id="sensVal"></b><input id="sens" type="range" min="0.2" max="2" step="0.05"></label>
+  <label>Zielhilfe (Flugbahn)<span class="chips" data-set="aimHelp"><button data-v="aus">Aus</button><button data-v="kurz">Kurz</button><button data-v="voll">Voll</button></span></label>
+  <label>Kamera folgt Geschoss<span class="chips" data-set="follow"><button data-v="true">An</button><button data-v="false">Aus</button></span></label>
+  <label>Ton<span class="chips" data-set="sound"><button data-v="true">An</button><button data-v="false">Aus</button></span></label>
+  <button class="big" data-act="close-settings">Fertig</button>
+</div></section>
+
+<section id="help" class="screen hidden"><div class="panel help">
+  <h2>Anleitung</h2>
+  <p><b>Ziel:</b> Triff den König im Bergfried der gegnerischen Burg, zerstöre die Hälfte ihrer Steine oder alle ihre Waffen.</p>
+  <p><b>Zielen:</b> Im runden Feld ziehen: hoch/runter = Winkel, links/rechts = Seite. Je weiter du ziehst, desto schneller dreht das Geschütz – nahe der Mitte passiert nichts (Totzone). Mit ▲▼◀▶ fein in kleinen Schritten. Kraft mit dem Balken (ziehen) oder ＋/－.</p>
+  <p><b>Waffen:</b> Kanone = schnell und flach. Katapult = hoher Bogen über die Mauer. Mörser = steile Sprengbombe, kostet 40 Gold. Gold gibt es jede Runde – je heiler die Burg, desto mehr.</p>
+  <p><b>Wind:</b> Der Pfeil oben zeigt die Windrichtung aus deiner Sicht. Steine fliegen weiter mit, Kugeln weniger.</p>
+  <p><b>Kamera:</b> Mit einem Finger drehen, mit zwei Fingern zoomen und verschieben. 🎥 wechselt Ansicht: Geschütz → Übersicht → Gegner.</p>
+  <p><b>PC:</b> Maus ziehen = drehen, Rad = Zoom, Rechtsklick ziehen = verschieben. Pfeiltasten = zielen, W/S = Kraft, Leertaste = Feuer, 1–3 = Waffe.</p>
+  <button class="big" data-act="close-help">Verstanden</button>
+</div></section>
+
+<section id="end" class="screen hidden"><div class="panel">
+  <h2 id="endTitle">Sieg!</h2>
+  <p id="endText"></p>
+  <button class="big" data-act="again">🔁 Nochmal</button>
+  <button data-act="quit">🏠 Hauptmenü</button>
+</div></section>
+
+<div id="rotate" class="hidden">📱↻ Bitte das Handy quer halten<button data-act="rotate-ok">Trotzdem spielen</button></div>
+<div id="loading">Lade Burgen …</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

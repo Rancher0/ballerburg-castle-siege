@@ -1,0 +1,3 @@
+{ "name": "Ballerburg 3D", "short_name": "Ballerburg", "start_url": "./", "display": "fullscreen", "orientation": "landscape",
+  "background_color": "#1d2a3a", "theme_color": "#1d2a3a", "lang": "de",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }] }
