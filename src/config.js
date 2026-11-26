@@ -15,19 +15,25 @@ export const WEAPONS = {
   kanone: {
     id: 'kanone', name: 'Kanone', icon: '💣', desc: 'Schnell und flach. Gut gegen Mauern.',
     elevMin: -5, elevMax: 60, yawRange: 40, speedMin: 18, speed: 64,
-    radius: 0.32, blast: 2.3, impulse: 20, destroy: 0.66, windFactor: 0.6,
+    radius: 0.32, blast: 2.3, impulse: 20, destroy: 0.66,
+    // Schadensprofil v2.1: kleines, tiefes Loch (mehrere Zentren entlang der Flugrichtung)
+    dmg: 2.6, dmgR: 1.3, pen: [[0, 1, 1], [1, 0.85, 0.85], [2, 0.7, 0.75]], eject: 1, push: 8, windFactor: 0.6,
     cost: 0, ammoName: 'Kugeln', color: 0x222222, launchHeight: 0.9, aiPreferHigh: false,
   },
   katapult: {
     id: 'katapult', name: 'Katapult', icon: '🪨', desc: 'Hoher Bogen über die Mauer, schwerer Stein.',
     elevMin: 42, elevMax: 75, yawRange: 40, speedMin: 15, speed: 52,
-    radius: 0.6, blast: 2.8, impulse: 22, destroy: 0.58, windFactor: 1.0,
+    radius: 0.6, blast: 2.8, impulse: 22, destroy: 0.58,
+    // breites, flaches Loch (Zentrum leicht vor der Mauer)
+    dmg: 3.0, dmgR: 2.0, pen: [[-0.5, 1, 1]], eject: 2, push: 10, windFactor: 1.0,
     cost: 0, ammoName: 'Steine', color: 0x8a8378, launchHeight: 3.6, aiPreferHigh: true,
   },
   moerser: {
     id: 'moerser', name: 'Mörser', icon: '🔥', desc: 'Sprengbombe, steil von oben. Bomben sind teuer.',
-    elevMin: 50, elevMax: 85, yawRange: 40, speedMin: 15, speed: 60,
-    radius: 0.42, blast: 3.0, impulse: 18, destroy: 0.5, windFactor: 0.8,
+    elevMin: 50, elevMax: 80, yawRange: 40, speedMin: 15, speed: 60,
+    radius: 0.42, blast: 3.0, impulse: 18, destroy: 0.5,
+    // Sprengung: großer Radius um den Einschlagpunkt
+    dmg: 3.2, dmgR: 2.5, pen: [[0, 1, 1]], eject: 3, push: 16, atImpact: true, windFactor: 0.8,
     cost: 0, ammoName: 'Bomben', color: 0x3a2a1a, launchHeight: 0.8, aiPreferHigh: true, explosive: true,
   },
 };
@@ -35,8 +41,8 @@ export const WEAPON_ORDER = ['kanone', 'katapult', 'moerser'];
 
 // Wirtschaft (angelehnt an klassische Burgenspiele): Steuern, Volk, Stimmung, Laden
 export const ECONOMY = {
-  startGold: 60, startPeople: 100, startMood: 70, startTax: 30, maxTax: 80,
-  startAmmo: { kanone: 10, katapult: 6, moerser: 1 },
+  startGold: 80, startPeople: 100, startMood: 70, startTax: 30, maxTax: 80,
+  startAmmo: { kanone: 14, katapult: 8, moerser: 2 },
   moodTaxNeutral: 25,     // bei diesem Steuersatz bleibt die Stimmung gleich
   moodPerBlockLost: 0.25, // Stimmungsverlust pro zerstörtem eigenen Block
 };
@@ -45,7 +51,7 @@ export const SHOP = [
   { id: 'ammo_kanone', kind: 'ammo', weapon: 'kanone', qty: 5, price: 15, icon: '💣', name: 'Kanonenkugeln ×5' },
   { id: 'ammo_katapult', kind: 'ammo', weapon: 'katapult', qty: 5, price: 10, icon: '🪨', name: 'Steine ×5' },
   { id: 'ammo_moerser', kind: 'ammo', weapon: 'moerser', qty: 1, price: 25, icon: '🔥', name: 'Mörserbombe ×1' },
-  { id: 'rep_wall', kind: 'repairWall', qty: 10, price: 30, icon: '🧱', name: 'Mauer ausbessern (10 Steine)' },
+  { id: 'rep_wall', kind: 'repairWall', qty: 15, price: 30, icon: '🧱', name: 'Mauer ausbessern (15 Steine)' },
   { id: 'rep_weapon', kind: 'repairWeapon', price: 50, icon: '🔧', name: 'Waffe reparieren' },
   { id: 'fest', kind: 'fest', price: 40, icon: '🎉', name: 'Volksfest (+20 Stimmung)', mood: 20 },
 ];
@@ -54,6 +60,9 @@ export const SHOP = [
 export const LINE_COLORS = { rot: 0xff2a2a, gelb: 0xffe23a, gruen: 0x3cff5a, cyan: 0x2ae8ff, magenta: 0xff3cf0, weiss: 0xffffff };
 export const LINE_COLOR_NAMES = { rot: 'Rot', gelb: 'Gelb', gruen: 'Grün', cyan: 'Cyan', magenta: 'Magenta', weiss: 'Weiß' };
 export const LINE_STYLES = { voll: 'Durchgezogen', strich: 'Gestrichelt', punkte: 'Punkte' };
+
+// Trefferpunkte der Steine (ein Volltreffer der Kanone macht 2.6 Schaden im Kern)
+export const BLOCK_HP = { mauer: 2, turm: 2.5, bergfried: 2.5, zinne: 1, koenig: 3 };
 
 export const RULES = {
   loseIntegrity: 0.5,    // unter 50 % intakter Blöcke -> Burg gefallen
@@ -82,7 +91,7 @@ export function terrainHeight(x, z) {
   const P = WORLD.plateau, ax = Math.abs(x);
   let h = P * smooth((ax - 9) / 24);                       // Tal mit Fluss in der Mitte
   h -= 1.2 * (1 - smooth(ax / 6));                          // Flussbett
-  const nearCastle = Math.max(0, 1 - Math.max(0, Math.hypot(ax - WORLD.castleX, z) - 9) / 6);
+  const nearCastle = Math.max(0, 1 - Math.max(0, Math.hypot(ax - WORLD.castleX, z) - 12) / 6);
   const noise = 0.7 * Math.sin(x * 0.21 + z * 0.13) * Math.cos(z * 0.17 - x * 0.07) + 0.35 * Math.sin(x * 0.53 + 1.3) * Math.sin(z * 0.41);
   h += noise * (1 - nearCastle) * (ax < 9 ? 0.3 : 1);
   const az = Math.abs(z);

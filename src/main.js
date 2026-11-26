@@ -4,7 +4,8 @@ import { forecast, moodWord, moodIcon } from './economy.js';
 import { Scene3D } from './scene.js';
 import { CameraRig } from './camera.js';
 import { Battle } from './game.js';
-import { stickCurve, clamp } from './ballistics.js';
+import { stickCurve, clamp, windScreenAngle } from './ballistics.js';
+import * as THREE from '../lib/three.module.min.js';
 import { SFX, setSound } from './sound.js';
 
 const $ = id => document.getElementById(id);
@@ -83,6 +84,15 @@ function buildWeaponButtons() {
     box.appendChild(b);
   }
 }
+// Windpfeil dreht sich mit der Kamera (jedes Bild)
+const _fwd = new THREE.Vector3(); let _lastWindDeg = null;
+function updateWindArrow() {
+  if (!battle) return;
+  gfx.camera.getWorldDirection(_fwd);
+  if (Math.hypot(_fwd.x, _fwd.z) < 1e-3) return;              // senkrecht nach unten: letzte Richtung behalten
+  const deg = Math.round(windScreenAngle(battle.wind, _fwd) * 2) / 2;
+  if (deg !== _lastWindDeg) { _lastWindDeg = deg; $('windArrow').style.transform = `rotate(${deg}deg)`; App.windDeg = deg; }
+}
 function hud() {
   if (!battle || battle.phase === 'idle') return;
   const P = battle.cur;
@@ -103,9 +113,8 @@ function hud() {
   $('aimPanel').classList.toggle('aimcam', battle.camMode === 'ziel');
   $('weapons').style.visibility = P.human ? 'visible' : 'hidden';
   // Wind aus Sicht des Schützen (rechts = Richtung Gegner)
-  const s = P.side === 0 ? 1 : -1, wx = battle.wind.x * s, wz = battle.wind.z * s;
   const strength = Math.hypot(battle.wind.x, battle.wind.z);
-  $('windArrow').style.transform = `rotate(${Math.atan2(wz, wx) * 180 / Math.PI}deg)`;
+  updateWindArrow();
   $('windVal').textContent = strength < 0.2 ? 'still' : strength < 1.2 ? 'schwach' : strength < 2.3 ? 'mittel' : 'stark';
 }
 function aimText() {
@@ -267,6 +276,7 @@ function frame(now) {
   if (lineT > 0 && (lineT -= dt) <= 0) $('line').classList.add('hidden');
   if (toastT > 0 && (toastT -= dt) <= 0) $('toast').classList.add('hidden');
   rig.update(dt);
+  updateWindArrow();
   gfx.render();
   requestAnimationFrame(frame);
 }

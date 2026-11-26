@@ -8,5 +8,6 @@ export const LINES = {
   aiBigHit: ['Bumm! Das war mein bester Schuss heute.', 'Eure Burg hat jetzt ein Panoramafenster.', 'Meine Kanoniere bekommen Extrasuppe!'],
   ownHit: ['Autsch – das war die eigene Mauer!', 'Hoppla, falsche Burg …'],
   miss: ['Daneben.', 'Knapp vorbei ist auch vorbei.', 'Der Wind hat mitgespielt.', 'Die Kugel wollte nur das Tal sehen.'],
+  crack: ['Die Mauer hat Risse – noch hält sie.', 'Angekratzt! Noch ein Treffer dort …', 'Gemäuer knirscht, steht aber noch.'],
   water: ['Platsch! Die Fische beschweren sich.', 'Ab in den Fluss.', 'Das war ein Bad, kein Treffer.'],
 };

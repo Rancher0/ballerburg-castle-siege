@@ -5,7 +5,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(dirname "$HERE")"
 OUT=${OUT:-$ROOT/../Ballerburg3D.apk}
 KS_DIR=${KS_DIR:-$ROOT/../keystore}          # Keystore liegt AUSSERHALB des Repos und wird nie committet
-VC=${VC:-2}; VN=${VN:-2.0}
+VC=${VC:-3}; VN=${VN:-2.1}
 for c in "${ANDROID_HOME:-}" /workspace/tetris/sdk; do
   [ -n "$c" ] && [ -f "$c/env.sh" ] && { . "$c/env.sh"; break; }
 done

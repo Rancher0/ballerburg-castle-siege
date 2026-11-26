@@ -2,7 +2,8 @@
 import { WORLD, WEAPONS, WEAPON_ORDER, ECONOMY, SHOP, RULES, PLAYER_NAMES_AI, PLAYER_NAMES_HOT } from './config.js';
 import { castlePlan, pickLayout, toWorld, facingYaw, muzzle } from './castle.js';
 import { newEconomy, settleTurn } from './economy.js';
-import { createWorld, makeBlock, makeKing, explode, allAsleep, pointInBox, CANNON } from './physics.js';
+import { createWorld, allAsleep, pointInBox, pushDynamic, dynamicBodies, isDynamic, HALF } from './physics.js';
+import { buildCastleState, applyHit, killKing as killKingC, repairCastle, toLocal, keyOf } from './damage.js';
 import { launchVelocity, stepProjectile, simulate, solveShot, clamp } from './ballistics.js';
 import { SFX } from './sound.js';
 import { LINES, pick } from './lines.js';
@@ -30,15 +31,13 @@ export class Battle {
   buildSide(side, plan) {
     const names = this.mode === 'ai' ? PLAYER_NAMES_AI : PLAYER_NAMES_HOT;
     const P = { side, plan, name: names[side], human: this.mode === 'hot' || side === 0, econ: newEconomy(), weapon: 'kanone', aim: {}, weapons: {}, blocks: [], keyIndex: new Map() };
-    plan.blocks.forEach((bl, i) => {
-      const p = toWorld(side, bl.u, bl.v, bl.l + 0.5);
-      const b = makeBlock(this.world, p); b.origin = p; b.side = side; b.bl = bl; P.blocks.push(b); P.keyIndex.set(`${bl.u},${bl.v},${bl.l}`, b);
-    });
+    P.C = buildCastleState(this.world, side, plan);
+    P.blocks = P.C.blocks; for (const b of P.blocks) P.keyIndex.set(keyOf(b.bl.u, b.bl.v, b.bl.l), b);
     const vis = this.gfx.buildCastle(side, plan.blocks, plan, toWorld);
     P.mesh = vis.mesh; P.flag = vis.flag;
-    const kp = toWorld(side, plan.king.u, plan.king.v, plan.king.y);
-    P.king = { body: makeKing(this.world, kp), mesh: this.gfx.makeKing(side), origin: { x: kp.x, y: kp.y + 0.5, z: kp.z }, dead: false };
-    P.king.body.addEventListener('collide', e => { const v = e.contact.getImpactVelocityAlongNormal(); if (Math.abs(v) > 9 && this.phase !== 'aim') this.killKing(P); });
+    P.king = P.C.king; P.king.mesh = this.gfx.makeKing(side);
+    // Herabstürzende Trümmer erschlagen den König
+    P.king.body.addEventListener('collide', e => { const o = e.body; if (!o || !isDynamic(o) || this.phase === 'aim') return; const v = e.contact.getImpactVelocityAlongNormal(); if (Math.abs(v) > 8) this.killKing(P, 'truemmer'); });
     for (const id of WEAPON_ORDER) {
       P.aim[id] = { elev: id === 'kanone' ? 12 : id === 'katapult' ? 50 : 65, yaw: 0, power: 0.75 };
       this.makeWeaponVis(P, id);
@@ -102,35 +101,8 @@ export class Battle {
   repairableWeapon(P) {
     return WEAPON_ORDER.find(id => !P.weapons[id].alive && P.weapons[id].support.every(b => !this.isLoose(b)) && P.weapons[id].support.length === P.plan.weapons[id].support.length);
   }
-  // Lose/zerstörte Steine von unten nach oben wieder an ihren Platz setzen (nur mit Unterbau und freiem Platz)
-  restoreBlocks(P, n, dry = false) {
-    let done = 0;
-    const cand = P.blocks.filter(b => this.isLoose(b)).sort((a, b) => a.bl.l - b.bl.l);
-    for (const b of cand) {
-      if (done >= n) break;
-      const { u, v, l } = b.bl;
-      const below = l === 0 ? null : P.keyIndex.get(`${u},${v},${l - 1}`);
-      const kingCell = l === 1 && u === P.plan.king.u && v === P.plan.king.v;
-      if (l > 0 && !(kingCell ? !P.king.dead : below && !this.isLoose(below))) continue;
-      const o = b.origin, blockers = [];
-      let occupied = false;
-      for (const q of [...this.allBlocks, this.players[0].king.body, this.players[1].king.body]) {
-        if (q === b || !q.world) continue;
-        if (Math.abs(q.position.x - o.x) < 0.9 && Math.abs(q.position.y - o.y) < 0.9 && Math.abs(q.position.z - o.z) < 0.9) {
-          if (q.origin && this.isLoose(q)) blockers.push(q); else { occupied = true; break; }
-        }
-      }
-      if (occupied) continue;
-      done++;
-      if (dry) return 1;
-      for (const q of blockers) this.world.removeBody(q);   // Schutt wegräumen
-      if (!b.world) this.world.addBody(b);
-      b.position.set(o.x, o.y, o.z); b.quaternion.set(0, 0, 0, 1); b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0);
-      b.previousPosition.copy(b.position); b.interpolatedPosition.copy(b.position); b.previousQuaternion.copy(b.quaternion); b.interpolatedQuaternion.copy(b.quaternion);
-      b.linearDamping = 0.2; b.angularDamping = 0.4; b.aabbNeedsUpdate = true; b.sleep(); b._hidden = false; b._synced = false;
-    }
-    return done;
-  }
+  // Risse heilen und fehlende Steine von unten nach oben wieder einsetzen (nur mit Unterbau, Schutt wird weggeräumt)
+  restoreBlocks(P, n, dry = false) { return repairCastle(P.C, this.world, n, dynamicBodies(this.world), dry); }
   aiEconomy(P) {
     const E = P.econ, buy = id => this.buy(P, id).ok;
     E.tax = E.mood < 40 ? 15 : E.mood > 70 ? 40 : 30;
@@ -139,22 +111,33 @@ export class Battle {
     if (E.ammo.kanone < 3 && E.gold >= 15) buy('ammo_kanone');
     if (E.ammo.katapult < 3 && E.gold >= 10) buy('ammo_katapult');
     if (E.ammo.moerser < 1 && E.gold >= 60) buy('ammo_moerser');
-    if (this.integrity(P) < 0.85 && E.gold >= 70) buy('rep_wall');
+    if ((this.integrity(P) < 0.93 || this.crackedCount(P) > 12) && E.gold >= 60) buy('rep_wall');
   }
   // --- Flugbahn / Zielhilfe ---
   shotParams(P = this.cur) {
     const a = this.aimOf(P), wp = WEAPONS[P.weapon], yaw = this.absYaw(P, a);
     return { wp, origin: muzzle(P.side, P.plan, P.weapon, yaw, a.elev), vel: launchVelocity(wp, a.elev, yaw, a.power), yaw, a };
   }
+  // Treffertest: intakte Steine über das Raster (27 Zellen), lose Steine einzeln
   hitTest(p, t, wp, origin) {
     const r = wp.radius;
     const nearOrigin = t < 0.45 && Math.hypot(p.x - origin.x, p.y - origin.y, p.z - origin.z) < 1.8;
-    for (const b of this.allBlocks) {
-      if (!b.world) continue;
-      const dx = b.position.x - p.x, dy = b.position.y - p.y, dz = b.position.z - p.z;
-      if (dx * dx + dy * dy + dz * dz > (0.87 + r) * (0.87 + r)) continue;
-      if (nearOrigin) continue;
-      if (pointInBox(b, p, r)) return 'block';
+    this._hitBlock = null;
+    if (!nearOrigin) {
+      for (const P of this.players) {
+        const L = toLocal(P.side, p); if (Math.abs(L.u) > 9 || Math.abs(L.v) > 9 || L.y > 13) continue;
+        const u0 = Math.round(L.u), v0 = Math.round(L.v), l0 = Math.floor(L.y);
+        for (let du = -1; du <= 1; du++) for (let dv = -1; dv <= 1; dv++) for (let dl = -1; dl <= 1; dl++) {
+          const b = P.C.grid.get(keyOf(u0 + du, v0 + dv, l0 + dl)); if (!b) continue;
+          const q = b.position;
+          if (Math.abs(q.x - p.x) < HALF + r && Math.abs(q.y - p.y) < 0.5 + r && Math.abs(q.z - p.z) < HALF + r) { this._hitBlock = b; return 'block'; }
+        }
+      }
+      for (const b of dynamicBodies(this.world)) {
+        const dx = b.position.x - p.x, dy = b.position.y - p.y, dz = b.position.z - p.z;
+        if (dx * dx + dy * dy + dz * dz > (0.87 + r) * (0.87 + r)) continue;
+        if (pointInBox(b, p, r)) { this._hitBlock = b; return 'block'; }
+      }
     }
     for (const P of this.players) {
       const k = P.king.body.position;
@@ -197,11 +180,19 @@ export class Battle {
     const C = AIM_CAM[P.weapon] || AIM_CAM.kanone;
     const pos = { x: w.pos.x - dx * C.back + sx * C.side, y: w.pos.y + C.up, z: w.pos.z - dz * C.back + sz * C.side };
     // nicht in Mauern stecken: so lange anheben, bis frei
-    for (let i = 0; i < 30 && P.blocks.some(b => b.world && Math.abs(b.position.x - pos.x) < 1.1 && Math.abs(b.position.y - pos.y) < 1.1 && Math.abs(b.position.z - pos.z) < 1.1); i++) pos.y += 0.5;
+    for (let i = 0; i < 30 && this.solidNear(P, pos); i++) pos.y += 0.5;
     const e = clamp(a.elev, 0, 60) * Math.PI / 180;
     const dist = 60, lift = Math.tan(e) * 11;                // leicht mit dem Winkel nach oben schwenken
     const look = { x: w.pos.x + dx * dist, y: WORLD.plateau + 1 + lift, z: w.pos.z + dz * dist };
     return { pos, look };
+  }
+  solidNear(P, pos) {
+    const L = toLocal(P.side, pos);
+    for (let du = -1; du <= 1; du++) for (let dv = -1; dv <= 1; dv++) for (let dl = -1; dl <= 1; dl++) {
+      const b = P.C.grid.get(keyOf(Math.round(L.u) + du, Math.round(L.v) + dv, Math.floor(L.y) + dl)); if (!b) continue;
+      if (Math.abs(b.position.x - pos.x) < 1.1 && Math.abs(b.position.y - pos.y) < 1.1 && Math.abs(b.position.z - pos.z) < 1.1) return true;
+    }
+    return false;
   }
   setCamMode(mode) {
     this.camMode = mode;
@@ -250,22 +241,31 @@ export class Battle {
     this.gfx.explosion(p, wp.blast, false); SFX.boom(wp.explosive);
     const before = this.players.map(P => this.looseCount(P));
     const vn = Math.hypot(pr.v.x, pr.v.y, pr.v.z) || 1, dir = { x: pr.v.x / vn, y: pr.v.y / vn, z: pr.v.z / vn };
-    explode(this.world, this.allBlocks, p, wp, dir);
+    const hb = this._hitBlock && this._hitBlock.state === 'ok' ? this._hitBlock : null;
+    const res = { destroyed: 0, cracked: 0, fallen: 0 };
     for (const P of this.players) {
-      const k = P.king.body.position;
-      if (Math.hypot(k.x - p.x, k.y - p.y, k.z - p.z) < wp.blast * 0.6) this.killKing(P);
+      const L = toLocal(P.side, p); if (Math.abs(L.u) > 11 || Math.abs(L.v) > 11) continue;
+      const r = applyHit(P.C, this.world, p, wp, dir, hb);
+      res.destroyed += r.destroyed.length; res.cracked += r.cracked.length; res.fallen += r.fallen.length;
+      this.gfx.debris?.(r.destroyed.filter(b => b.state === 'gone').map(b => b.position));
+      if (r.kingHit) this.killKing(P);
+    }
+    pushDynamic(this.world, p, wp.blast, wp.push || 8);
+    this.lastHit = res;
+    for (const P of this.players) {
       for (const id of WEAPON_ORDER) { const w = P.weapons[id]; if (w.alive && Math.hypot(w.pos.x - p.x, w.pos.y + 0.5 - p.y, w.pos.z - p.z) < Math.min(1.4, wp.blast * 0.55)) this.breakWeapon(P, id); }
     }
     this.hitBefore = before; this.lastImpact = { ...p, type };
   }
-  killKing(P) { if (P.king.dead) return; P.king.dead = true; P.king.body.wakeUp(); P.king.body.applyImpulse(new CANNON.Vec3((Math.random() - 0.5) * 2, 3, (Math.random() - 0.5) * 2)); }
+  killKing(P, why = 'treffer') { if (killKingC(P.C, this.world)) this.kingWhy = why; }
   breakWeapon(P, id) {
     const w = P.weapons[id]; if (!w.alive) return; w.alive = false;
     w.g.rotation.z = (Math.random() - 0.5) * 1.2; w.g.rotation.x = (Math.random() - 0.5) * 0.8; w.g.position.y -= 0.3;
     w.g.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.multiplyScalar(0.35); } });
     this.hooks.onToast?.(`${P.name}: ${WEAPONS[id].name} zerstört!`);
   }
-  isLoose(b) { return !b.world || Math.hypot(b.position.x - b.origin.x, b.position.y - b.origin.y, b.position.z - b.origin.z) > RULES.blockLooseDist; }
+  isLoose(b) { return b.state !== 'ok'; }
+  crackedCount(P) { let n = 0; for (const b of P.blocks) if (b.state === 'ok' && b.hp < b.maxHp) n++; return n; }
   looseCount(P) { let n = 0; for (const b of P.blocks) if (this.isLoose(b)) n++; return n; }
   integrity(P) { return 1 - this.looseCount(P) / P.blocks.length; }
   endTurnChecks() {
@@ -275,18 +275,15 @@ export class Battle {
       const lost = w.support.filter(b => this.isLoose(b)).length;
       if (lost >= Math.ceil(w.support.length / 2) + (w.support.length > 2 ? 1 : 0)) this.breakWeapon(P, id);
     }
-    for (const P of this.players) {
-      const k = P.king.body, o = P.king.origin;
-      if (Math.hypot(k.position.x - o.x, k.position.y - o.y, k.position.z - o.z) > 0.7) this.killKing(P);
-    }
     const lost = this.players.map(P => P.king.dead ? 'koenig' : this.integrity(P) < RULES.loseIntegrity ? 'burg' : !WEAPON_ORDER.some(id => P.weapons[id].alive) ? 'waffen' : null);
     const shooter = this.turn;
     if (this.hitBefore) {
       const d = this.players.map((P, i) => this.looseCount(P) - this.hitBefore[i]);
       this.stats.destroyed[shooter] += d[1 - shooter];
       this.players.forEach((P, i) => { P.econ.lostSince += Math.max(0, d[i]); });
-      if (d[1 - shooter] >= 8) this.say(pick(this.cur.human ? LINES.bigHit : LINES.aiBigHit));
+      if (d[1 - shooter] >= 10) this.say(pick(this.cur.human ? LINES.bigHit : LINES.aiBigHit));
       else if (d[1 - shooter] > 0) this.say(pick(this.cur.human ? LINES.hit : LINES.aiHit));
+      else if (this.lastHit?.cracked > 0 && this.lastImpact && this.nearSide(this.lastImpact) === 1 - shooter) this.say(pick(LINES.crack));
       else if (d[shooter] > 0) this.say(pick(LINES.ownHit));
       else this.say(pick(LINES.miss));
       this.hitBefore = null;
@@ -300,6 +297,7 @@ export class Battle {
     }
     return false;
   }
+  nearSide(p) { return p.x * (this.players[1].side === 1 ? 1 : -1) > 0 ? 1 : 0; }
   say(text) { this.hooks.onLine?.(text); }
   // --- Computer ---
   aiThink() {
@@ -350,7 +348,7 @@ export class Battle {
     } else this.acc = 0;
     if (this.phase === 'settle') {
       this.settleT += dt;
-      if ((this.settleT > 1.3 && allAsleep(this.allBlocks)) || this.settleT > RULES.settleMax) {
+      if ((this.settleT > 1.3 && allAsleep(this.world)) || this.settleT > RULES.settleMax) {
         if (!this.endTurnChecks()) { this.turn = 1 - this.turn; if (this.turn === 0) this.round++; this.newWind(); this.startTurn(); }
       }
     }
@@ -371,7 +369,7 @@ export class Battle {
     this.gfx.updateFx(dt);
   }
   dispose() {
-    for (const P of this.players) { this.gfx.scene.remove(P.mesh, P.flag, P.king.mesh); for (const id of WEAPON_ORDER) this.gfx.scene.remove(P.weapons[id].g); }
+    for (const P of this.players) { this.gfx.scene.remove(P.mesh, P.mesh.userData.cracks, P.flag, P.king.mesh); for (const id of WEAPON_ORDER) this.gfx.scene.remove(P.weapons[id].g); }
     if (this.proj) this.gfx.scene.remove(this.proj.mesh);
   }
 }

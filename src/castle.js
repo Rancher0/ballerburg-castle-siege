@@ -3,8 +3,8 @@ import { WORLD } from './config.js';
 
 // Burg-Layouts. Jedes liefert Blöcke {u,v,l,kind} sowie König, Waffenplätze (mit Unterbau) und Fahne.
 export const LAYOUTS = {
-  klassisch: { name: 'Klassisch', desc: 'Vier Türme, Bergfried in der Mitte' },
-  festung:   { name: 'Festung', desc: 'Breit, doppelte Frontmauer, niedriger' },
+  klassisch: { name: 'Klassisch', desc: 'Vier Türme, Bergfried in der Mitte, Mauern 2 dick' },
+  festung:   { name: 'Festung', desc: 'Breit und niedrig, Frontmauer 3 dick' },
   turmburg:  { name: 'Turmburg', desc: 'Hoher Bergfried, hohe Mauern' },
 };
 export const LAYOUT_IDS = Object.keys(LAYOUTS);
@@ -15,75 +15,84 @@ function builder() {
   const col = (u, v, from, to, kind) => { for (let l = from; l < to; l++) add(u, v, l, kind); };
   return { blocks, add, col };
 }
-const towerTop = (u0, v0, l) => [[u0, v0, l], [u0 + 1, v0, l], [u0, v0 + 1, l], [u0 + 1, v0 + 1, l]];
+const towerTop = (u0, v0, l) => [[u0, v0, l], [u0 + 1, v0, l], [u0 - 1, v0, l], [u0, v0 + 1, l], [u0, v0 - 1, l]];  // Mitte + 4 Nachbarn
+const A = Math.abs;
 
+// v2.1: größere Burgen, Mauern 2–3 Steine dick (äußere Schichten platzen zuerst weg)
 function klassisch() {
+  // 13 × 13, Ring 2 dick und 5 hoch, Tor vorne niedriger, Ecktürme 3 × 3 (8 hoch), Bergfried 5 × 5 (7 hoch)
   const { blocks, add, col } = builder();
-  for (let u = -4; u <= 4; u++) for (let v = -4; v <= 4; v++) {
-    const wall = Math.abs(u) === 4 || Math.abs(v) === 4;
-    const tower = Math.abs(u) >= 3 && Math.abs(v) >= 3;
-    const keep = Math.abs(u) <= 1 && Math.abs(v) <= 1;
+  for (let u = -6; u <= 6; u++) for (let v = -6; v <= 6; v++) {
+    const ring = Math.max(A(u), A(v)) >= 5, outer = Math.max(A(u), A(v)) === 6;
+    const tower = A(u) >= 4 && A(v) >= 4;
+    const gate = u >= 5 && A(v) <= 1;
+    const keep = A(u) <= 2 && A(v) <= 2;
     if (tower) {
-      col(u, v, 0, 7, 'turm');
-      if (Math.abs(u) === 4 && Math.abs(v) === 4 && !(u === 4 && v === 4) && !(u === -4 && v === -4)) add(u, v, 7, 'zinne'); // Plätze für Kanone/Mörser frei
-    } else if (wall) {
-      col(u, v, 0, 4, 'mauer');
-      const gate = u === 4 && Math.abs(v) <= 1;   // vorne Mitte ohne Zinnen (Schussfeld fürs Katapult)
-      if (!gate && (u + v) % 2 === 0) add(u, v, 4, 'zinne');
+      col(u, v, 0, 8, 'turm');
+      const weaponTop = (u >= 4 && v >= 4) || (u <= -4 && v <= -4);
+      if (!weaponTop && (A(u) === 6 || A(v) === 6) && (u + v) % 2 === 0) add(u, v, 8, 'zinne');
+    } else if (ring) {
+      col(u, v, 0, gate ? 3 : 5, 'mauer');
+      if (outer && !gate && (u + v) % 2 === 0) add(u, v, 5, 'zinne');
     }
-    if (keep) col(u, v, u === 0 && v === 0 ? 1 : 0, 6, 'bergfried');  // Mitte unten = Thronsaal des Königs
+    if (keep) col(u, v, u === 0 && v === 0 ? 1 : 0, 7, 'bergfried');  // Mitte unten = Thronsaal des Königs
   }
   return {
-    blocks, king: { u: 0, v: 0, y: 0 }, flag: { u: 0, v: 0, y: 6 },
+    blocks, king: { u: 0, v: 0, y: 0 }, flag: { u: 2, v: 2, y: 7 },
     weapons: {
-      kanone: { u: 3.5, v: 3.5, y: 7, support: towerTop(3, 3, 6) },      // auf dem vorderen Turm
-      katapult: { u: 2.35, v: 0, y: 0, support: [] },                    // im Hof vor dem Bergfried
-      moerser: { u: -3.5, v: -3.5, y: 7, support: towerTop(-4, -4, 6) }, // auf dem hinteren Turm
+      kanone: { u: 5, v: 5, y: 8, support: towerTop(5, 5, 7) },          // auf dem vorderen Turm
+      katapult: { u: 3.5, v: 0, y: 0, support: [] },                     // im Hof vor dem Bergfried
+      moerser: { u: -5, v: -5, y: 8, support: towerTop(-5, -5, 7) },     // auf dem hinteren Turm
     },
   };
 }
 function festung() {
-  // 9 tief (u -4..4), 11 breit (v -5..5); doppelte, niedrige Frontmauer; Bergfried hinten
+  // 13 tief × 15 breit, Frontmauer 3 dick, sonst 2, 4 hoch; Ecktürme 3 × 3 (7 hoch); Bergfried 5 × 5 hinten
   const { blocks, add, col } = builder();
-  for (let u = -4; u <= 4; u++) for (let v = -5; v <= 5; v++) {
-    const tower = Math.abs(u) >= 3 && Math.abs(v) >= 4;
-    const wall = Math.abs(u) === 4 || Math.abs(v) === 5;
-    const inner = u === 3 && Math.abs(v) <= 3;                 // zweite Frontmauer
-    const keep = Math.abs(u + 2) <= 1 && Math.abs(v) <= 1;       // Bergfried bei u = -2
-    if (tower) { col(u, v, 0, 6, 'turm'); if ((u === -4 && v === 5) || (u === 4 && v === -5)) add(u, v, 6, 'zinne'); }
-    else if (wall || inner) { col(u, v, 0, 3, 'mauer'); if (u !== 4 && u !== 3 && (u + v) % 2 === 0) add(u, v, 3, 'zinne'); }
-    if (keep) col(u, v, u === -2 && v === 0 ? 1 : 0, 5, 'bergfried');
+  for (let u = -6; u <= 6; u++) for (let v = -7; v <= 7; v++) {
+    const front = u >= 4, back = u <= -5, side = A(v) >= 6;
+    const ring = front || back || side;
+    const tower = A(u) >= 4 && A(v) >= 5 && !(u > -4 && u < 4);
+    const gate = front && A(v) <= 1;
+    const keep = u >= -4 && u <= 0 && A(v) <= 2;
+    if (tower) {
+      col(u, v, 0, 7, 'turm');
+      const weaponTop = (u >= 4 && v >= 5) || (u <= -4 && v <= -5);
+      if (!weaponTop && (A(u) === 6 || A(v) === 7) && (u + v) % 2 === 0) add(u, v, 7, 'zinne');
+    } else if (ring) {
+      col(u, v, 0, gate ? 3 : 4, 'mauer');
+      const outer = u === 6 || u === -6 || A(v) === 7;
+      if (outer && !gate && u !== 6 && (u + v) % 2 === 0) add(u, v, 4, 'zinne');
+    }
+    if (keep) col(u, v, u === -2 && v === 0 ? 1 : 0, 6, 'bergfried');
   }
   return {
-    blocks, king: { u: -2, v: 0, y: 0 }, flag: { u: -2, v: 0, y: 5 },
+    blocks, king: { u: -2, v: 0, y: 0 }, flag: { u: -1, v: 1, y: 6 },
     weapons: {
-      kanone: { u: 3.5, v: 4.5, y: 6, support: towerTop(3, 4, 5) },
-      katapult: { u: 1.3, v: 0, y: 0, support: [] },
-      moerser: { u: -3.5, v: -4.5, y: 6, support: towerTop(-4, -5, 5) },
+      kanone: { u: 5, v: 6, y: 7, support: towerTop(5, 6, 6) },
+      katapult: { u: 2.3, v: 0, y: 0, support: [] },
+      moerser: { u: -5, v: -6, y: 7, support: towerTop(-5, -6, 6) },
     },
   };
 }
 function turmburg() {
-  // wie klassisch, aber hohe Mauern, nur vorne Türme, Bergfried 9 hoch mit Mörser oben
+  // 13 × 13, Ring 2 dick und 6 hoch, nur vorne Türme (3 × 3, 9 hoch), Bergfried 5 × 5 und 11 hoch mit Mörser oben
   const { blocks, add, col } = builder();
-  for (let u = -4; u <= 4; u++) for (let v = -4; v <= 4; v++) {
-    const wall = Math.abs(u) === 4 || Math.abs(v) === 4;
-    const tower = u >= 3 && Math.abs(v) >= 3;
-    const keep = Math.abs(u) <= 1 && Math.abs(v) <= 1;
-    if (tower) { col(u, v, 0, 8, 'turm'); if (u === 4 && v === 4) add(u, v, 8, 'zinne'); }
-    else if (wall) {
-      const gate = u === 4 && Math.abs(v) <= 1;
-      col(u, v, 0, gate ? 4 : 5, 'mauer');
-      if (!gate && (u + v) % 2 === 0) add(u, v, 5, 'zinne');
-    }
-    if (keep) col(u, v, u === 0 && v === 0 ? 1 : 0, 9, 'bergfried');
+  for (let u = -6; u <= 6; u++) for (let v = -6; v <= 6; v++) {
+    const ring = Math.max(A(u), A(v)) >= 5, outer = Math.max(A(u), A(v)) === 6;
+    const tower = u >= 4 && A(v) >= 4;
+    const gate = u >= 5 && A(v) <= 2;   // breites Tor: Katapult schießt flach heraus
+    const keep = A(u) <= 2 && A(v) <= 2;
+    if (tower) { col(u, v, 0, 9, 'turm'); if (!(v <= -4) && (A(u) === 6 || A(v) === 6) && (u + v) % 2 === 0) add(u, v, 9, 'zinne'); }
+    else if (ring) { col(u, v, 0, gate ? 3 : 6, 'mauer'); if (outer && !gate && (u + v) % 2 === 0) add(u, v, 6, 'zinne'); }
+    if (keep) col(u, v, u === 0 && v === 0 ? 1 : 0, 11, 'bergfried');
   }
   return {
-    blocks, king: { u: 0, v: 0, y: 0 }, flag: { u: 1, v: 1, y: 9 },
+    blocks, king: { u: 0, v: 0, y: 0 }, flag: { u: 2, v: 2, y: 11 },
     weapons: {
-      kanone: { u: 3.5, v: -3.5, y: 8, support: towerTop(3, -4, 7) },
-      katapult: { u: 2.35, v: 0, y: 0, support: [] },
-      moerser: { u: -0.5, v: -0.5, y: 9, support: towerTop(-1, -1, 8) },
+      kanone: { u: 5, v: -5, y: 9, support: towerTop(5, -5, 8) },
+      katapult: { u: 3.5, v: 0, y: 0, support: [] },
+      moerser: { u: 0, v: 0, y: 11, support: towerTop(0, 0, 10) },
     },
   };
 }

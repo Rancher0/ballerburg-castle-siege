@@ -84,3 +84,12 @@ export function stickCurve(v, dead = 0.18) {
   const t = (a - dead) / (1 - dead);
   return Math.sign(v) * t * t * 0.85 + Math.sign(v) * t * 0.15;
 }
+
+// Windpfeil relativ zur Kamera: Winkel (Grad, CSS-rotate, 0 = nach rechts, positiv = im Uhrzeigersinn)
+// wind = {x,z}, camFwd = Blickrichtung der Kamera {x,z} (y wird ignoriert)
+export function windScreenAngle(wind, camFwd) {
+  const n = Math.hypot(camFwd.x, camFwd.z) || 1, fx = camFwd.x / n, fz = camFwd.z / n;
+  const sx = wind.x * -fz + wind.z * fx;      // Anteil nach rechts
+  const sy = wind.x * fx + wind.z * fz;       // Anteil nach vorn (= oben auf dem Bildschirm)
+  return Math.atan2(-sy, sx) * 180 / Math.PI;
+}

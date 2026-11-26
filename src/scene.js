@@ -32,7 +32,7 @@ export class Scene3D {
     this.clockT = 0;
     this.buildSky(); this.buildLights(); this.buildTerrain(); this.buildWater(); this.buildTrees();
     this.stoneMap = stoneTexture();
-    this.fx = []; this.debris = [];
+    this.fx = [];
     this.setQuality(quality);
     // Ziellinie: Röhre (Kern) + dunkler Rand, immer sichtbar (depthTest aus), Farbe/Stil einstellbar
     this.trajCore = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0xff2a2a, depthTest: false, transparent: true, opacity: 0.95 }));
@@ -90,7 +90,7 @@ export class Scene3D {
       if (h < WORLD.waterLevel + 0.3) c.setRGB(0.76 + n, 0.70 + n, 0.52);         // Sand
       else if (h > 17) c.setRGB(0.52 + n, 0.5 + n, 0.47);                           // Fels
       else c.setRGB(0.33 + n + h * 0.006, 0.52 + n - h * 0.004, 0.22);               // Wiese
-      const near = Math.abs(Math.abs(x) - WORLD.castleX) < 7 && Math.abs(z) < 7;
+      const near = Math.abs(Math.abs(x) - WORLD.castleX) < 10 && Math.abs(z) < 10;
       if (near) c.setRGB(0.5 + n, 0.45 + n, 0.33);                                   // Burghof (Erde)
       col.set([c.r, c.g, c.b], i * 3);
     }
@@ -113,7 +113,7 @@ export class Scene3D {
     while (n < this.treeMax && guard++ < 5000) {
       const x = (Math.random() - 0.5) * 220, z = (Math.random() - 0.5) * 180;
       const ax = Math.abs(x);
-      if (Math.abs(ax - WORLD.castleX) < 11 && Math.abs(z) < 12) continue;   // nicht in die Burg
+      if (Math.abs(ax - WORLD.castleX) < 15 && Math.abs(z) < 16) continue;   // nicht in die Burg
       if (ax < 9) continue;                                                  // nicht ins Wasser
       if (Math.abs(z) < 8 && ax < 34) continue;                              // Schusslinie etwas frei
       const h = terrainHeight(x, z); if (h > 22) continue;
@@ -130,15 +130,20 @@ export class Scene3D {
     const mat = new THREE.MeshLambertMaterial({ map: this.stoneMap });
     const im = new THREE.InstancedMesh(geo, mat, blocks.length);
     im.castShadow = true; im.receiveShadow = true; im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    const c = new THREE.Color(), tint = new THREE.Color(PLAYER_COLORS[side]);
+    const c = new THREE.Color(), tint = new THREE.Color(PLAYER_COLORS[side]), baseCols = [];
     blocks.forEach((b, i) => {
       const base = b.kind === 'bergfried' ? 0.93 : b.kind === 'turm' ? 0.86 : 0.98;
       const r = 0.92 + Math.random() * 0.1;
       c.setRGB(base * r, base * r * 0.97, base * r * 0.92);
       if (b.kind === 'zinne') c.lerp(tint, 0.18);
-      im.setColorAt(i, c);
+      im.setColorAt(i, c); baseCols.push(c.clone());
     });
     this.scene.add(im);
+    // Risse: zweites InstancedMesh mit Riss-Textur, leicht größer als der Stein (nur für angeschlagene Steine sichtbar)
+    const cracks = new THREE.InstancedMesh(new THREE.BoxGeometry(1.0, 1.02, 1.0), new THREE.MeshBasicMaterial({ map: this.crackMap(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }), blocks.length);
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0); for (let i = 0; i < blocks.length; i++) cracks.setMatrixAt(i, zero);
+    cracks.frustumCulled = false; this.scene.add(cracks);
+    im.userData = { base: baseCols, cracks };
     // Fahne auf dem Bergfried
     const flag = new THREE.Group(); const fp = toWorld(side, plan.flag.u, plan.flag.v, plan.flag.y);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3.2, 6), new THREE.MeshLambertMaterial({ color: 0x5b4632 })); pole.position.y = 1.6;
@@ -148,16 +153,50 @@ export class Scene3D {
     this.scene.add(flag);
     return { mesh: im, flag };
   }
+  crackMap() {
+    if (this._crackMap) return this._crackMap;
+    const cv = document.createElement('canvas'); cv.width = cv.height = 128; const g = cv.getContext('2d');
+    g.strokeStyle = 'rgba(20,14,8,0.95)'; g.lineCap = 'round';
+    const branch = (x, y, a, len, w, d) => { if (d > 4 || len < 6) return; const x2 = x + Math.cos(a) * len, y2 = y + Math.sin(a) * len; g.lineWidth = w; g.beginPath(); g.moveTo(x, y); g.lineTo(x2, y2); g.stroke(); branch(x2, y2, a + (Math.random() - 0.5) * 1.2, len * 0.75, w * 0.75, d + 1); if (Math.random() < 0.6) branch(x2, y2, a + (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.6), len * 0.55, w * 0.6, d + 2); };
+    for (let k = 0; k < 5; k++) branch(64, 64, k * 1.26 + Math.random() * 0.5, 22 + Math.random() * 10, 4, 0);
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; this._crackMap = t; return t;
+  }
+  // Steine abgleichen: statische nur bei Änderung (_dirty), bewegte jedes Bild; Risse/Abdunklung nach Trefferpunkten
   syncBlocks(mesh, bodies) {
-    const m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), zero = new THREE.Vector3(0, 0, 0);
+    const m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), zero = new THREE.Vector3(0, 0, 0), c = new THREE.Color();
+    const { base, cracks } = mesh.userData; let mDirty = false, cDirty = false, kDirty = false;
     for (let i = 0; i < bodies.length; i++) {
       const b = bodies[i];
-      if (!b.world) { if (!b._hidden) { m.compose(p.set(0, -50, 0), q.identity(), zero); mesh.setMatrixAt(i, m); b._hidden = true; } continue; }
-      if (b.sleepState === 2 && b._synced) continue;
+      const hpKey = b.state === 'ok' ? Math.round(b.hp * 4) : -1;
+      if (b._hpKey !== hpKey) {
+        b._hpKey = hpKey; const f = b.state === 'ok' ? b.hp / b.maxHp : 1;
+        c.copy(base[i]).multiplyScalar(f < 1 ? 0.62 + 0.3 * f : 1); if (f < 1) c.r *= 1.05; mesh.setColorAt(i, c); cDirty = true;
+        if (f < 1 && b.state === 'ok') { m.compose(p.set(b.position.x, b.position.y, b.position.z), q.identity(), one); cracks.setMatrixAt(i, m); b._crackShown = true; kDirty = true; }
+        else if (b._crackShown) { m.compose(p.set(0, -50, 0), q.identity(), zero); cracks.setMatrixAt(i, m); b._crackShown = false; kDirty = true; }
+      }
+      if (!b.world) { if (!b._hidden) { m.compose(p.set(0, -50, 0), q.identity(), zero); mesh.setMatrixAt(i, m); b._hidden = true; mDirty = true; } continue; }
+      if (b._hidden) { b._hidden = false; b._synced = false; }
+      if (b._dirty) { b._dirty = false; b._synced = false; }
+      if (b._synced && (b.type === 2 || b.sleepState === 2)) continue;
       p.set(b.position.x, b.position.y, b.position.z); q.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
-      m.compose(p, q, one); mesh.setMatrixAt(i, m); b._synced = b.sleepState === 2;
+      m.compose(p, q, one); mesh.setMatrixAt(i, m); b._synced = b.type === 2 || b.sleepState === 2; mDirty = true;
     }
-    mesh.instanceMatrix.needsUpdate = true;
+    if (mDirty) mesh.instanceMatrix.needsUpdate = true;
+    if (cDirty && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    if (kDirty) cracks.instanceMatrix.needsUpdate = true;
+  }
+  // Gesteinssplitter (nur Grafik, keine Physik)
+  debris(points) {
+    if (!points?.length) return;
+    const n = Math.min(28, points.length * 4), mat = new THREE.MeshLambertMaterial({ color: 0x9a9184, transparent: true });
+    for (let i = 0; i < n; i++) {
+      const pt = points[i % points.length], sz = 0.14 + Math.random() * 0.22;
+      const s = new THREE.Mesh(new THREE.BoxGeometry(sz, sz, sz), i ? mat.clone() : mat);
+      s.position.set(pt.x + (Math.random() - 0.5) * 0.8, pt.y + (Math.random() - 0.5) * 0.8, pt.z + (Math.random() - 0.5) * 0.8);
+      s.rotation.set(Math.random() * 3, Math.random() * 3, 0); this.scene.add(s);
+      const a = Math.random() * 6.28, r = 1.5 + Math.random() * 4;
+      this.fx.push({ m: s, v: new THREE.Vector3(Math.cos(a) * r, 2 + Math.random() * 5, Math.sin(a) * r), life: 1.1 + Math.random() * 0.6, t: 0, grow: 0, spin: true, ground: true });
+    }
   }
 
   // ---------- Figuren & Waffen ----------
@@ -238,7 +277,8 @@ export class Scene3D {
       const f = this.fx[i]; f.t += dt; const k = f.t / f.life;
       if (f.light) { f.light.intensity = 40 * (1 - k); }
       if (f.m) {
-        if (!f.noGrav) f.v.y -= 9 * dt;
+        if (!f.noGrav) f.v.y -= (f.ground ? 18 : 9) * dt;
+        if (f.spin) { f.m.rotation.x += dt * 6; f.m.rotation.y += dt * 4; }
         f.m.position.addScaledVector(f.v, dt); f.m.scale.setScalar(1 + k * f.grow); f.m.material.opacity = Math.max(0, 0.95 * (1 - k));
       }
       if (k >= 1) { if (f.m) { this.scene.remove(f.m); f.m.geometry.dispose(); f.m.material.dispose(); } if (f.light) this.scene.remove(f.light); this.fx.splice(i, 1); }

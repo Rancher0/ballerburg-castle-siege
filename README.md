@@ -4,7 +4,15 @@
 
 **Spielen:** https://rancher0.github.io/ballerburg-castle-siege/ (Android-Chrome im Querformat, oder am PC)
 
-## Neu in Version 2
+## Neu in Version 2.1
+- **Windpfeil dreht mit der Kamera**: zeigt in jeder Ansicht, wohin der Wind aus der aktuellen Blickrichtung weht (oben = vom Betrachter weg), Stärke bleibt daneben
+- **Löcher statt Einsturz**: Steine sind vermörtelt und haben Trefferpunkte. Ein Treffer reißt ein Loch, Nachbarsteine bekommen sichtbare Risse; erst ein zweiter Volltreffer daneben bricht den Abschnitt darüber ein. Steine ohne Halt (nichts darunter, zu wenig tragende Nachbarn) fallen
+- **Schadensprofile**: Kanone = kleines, tiefes Loch; Katapult = breites, flaches Loch in der Außenschicht; Mörser = Sprengung. Splitter fliegen, einzelne Steine werden herausgeschleudert
+- **Größere, dickere Burgen**: alle 3 Layouts 13×13 bis 13×15 Felder, Mauern 2 (Festung vorne 3) Steine dick, ~700–860 Steine pro Burg; Bergfried 5×5 um den König
+- **Balance**: Partien dauern etwa doppelt so viele Schüsse (Simulation ~30–60 statt ~6–38), König hat Trefferpunkte, mehr Startmunition, Mauer ausbessern = 15 Steine und heilt Risse
+- Schnellere Physik: intakte Steine sind statisch in einem Raster, eigene Broadphase und Kollisionsmatrix (auch 1700 Körper bleiben flüssig)
+
+## Version 2
 - **Zielansicht** 🎥: Kamera knapp hinter und über der aktiven Waffe, Blick entlang des Rohrs zur Gegnerburg – folgt Winkel und Seite live (Standard beim Zielen)
 - **Ziellinie ohne Wind**: zeigt die reine Flugbahn, den Wind schätzt man selbst. Dick und mit dunklem Rand, Farbe wählbar (Rot, Gelb, Grün, Cyan, Magenta, Weiß), Stil durchgezogen/gestrichelt/Punkte, Länge Aus/Kurz/Voll
 - **Wirtschaft** 🛒: Steuersatz, Volk und Stimmung bestimmen das Einkommen; Laden für Munition, Mauerreparatur, Waffenreparatur und Volksfest. Stimmung 0 = Aufstand = verloren
@@ -14,7 +22,7 @@
 
 ## Features
 - 3D-Szene mit three.js: Tal mit Fluss, Berge, Bäume, Wolken, Schatten
-- Burgen aus ~250 einzelnen Steinblöcken mit echter Physik (cannon-es): Mauern brechen, Türme stürzen ein
+- Burgen aus ~700–860 einzelnen Steinblöcken mit Trefferpunkten und Physik (cannon-es): Löcher, Risse, Einstürze
 - 3 Waffen: Kanone (flach, schnell), Katapult (hoher Bogen), Mörser (Sprengbombe); jeder Schuss braucht Munition
 - Zielen mit Winkel, Seite und Kraft, Wind beeinflusst den Flug (die Ziellinie zeigt die Bahn ohne Wind)
 - Sanfte Touch-Steuerung: Ziel-Joystick mit Totzone, einstellbare Empfindlichkeit, Feinschritt-Tasten
