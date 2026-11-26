@@ -23,6 +23,9 @@
       <button data-diff="leicht">Leicht</button><button data-diff="mittel">Mittel</button><button data-diff="schwer">Schwer</button>
     </div>
     <button class="big alt" data-act="start-hot">👥 Zwei Spieler (ein Gerät)</button>
+    <div class="chips" id="layoutChips" data-set="layout">
+      <span class="lbl">Burg:</span><button data-v="zufall">🎲 Zufall</button><button data-v="klassisch">Klassisch</button><button data-v="festung">Festung</button><button data-v="turmburg">Turmburg</button>
+    </div>
     <div class="row">
       <button data-act="settings">⚙️ Einstellungen</button>
       <button data-act="help">❓ Anleitung</button>
@@ -34,13 +37,13 @@
 <!-- Spiel-HUD -->
 <section id="hud" class="hidden">
   <div class="topbar">
-    <div class="pl pl0"><b id="n0">Du</b><span id="g0">💰 0</span><i class="bar"><em id="i0"></em></i></div>
+    <div class="pl pl0"><b id="n0">Du</b><span id="g0">💰 0</span><i class="bar"><em id="i0"></em></i><span class="mood" id="m0"></span></div>
     <div class="mid">
       <div id="turnText">Du bist dran</div>
       <div class="wind"><span>Wind</span><b id="windArrow">➤</b><span id="windVal">0</span></div>
     </div>
-    <div class="pl pl1"><b id="n1">Computer</b><span id="g1">💰 0</span><i class="bar"><em id="i1"></em></i></div>
-    <div class="tbtns"><button id="camBtn" title="Kamera">🎥</button><button id="pauseBtn" title="Pause">⏸</button></div>
+    <div class="pl pl1"><b id="n1">Computer</b><span id="g1">💰 0</span><i class="bar"><em id="i1"></em></i><span class="mood" id="m1"></span></div>
+    <div class="tbtns"><button id="shopBtn" title="Laden &amp; Steuern">🛒</button><button id="camBtn" title="Kamera">🎥</button><button id="pauseBtn" title="Pause">⏸</button></div>
   </div>
   <div id="line" class="line hidden"></div>
   <div id="toast" class="toast hidden"></div>
@@ -48,6 +51,7 @@
   <div id="weapons" class="weapons"></div>
 
   <div id="aimPanel" class="aim">
+    <button id="aimFold" class="fold" title="Zielfeld ein-/ausklappen">▾</button>
     <div class="vals"><span>Winkel <b id="vElev">0°</b></span><span>Seite <b id="vYaw">0°</b></span><span>Kraft <b id="vPow">0%</b></span></div>
     <div class="aimrow">
       <div class="fine">
@@ -79,19 +83,36 @@
   <h2>Einstellungen</h2>
   <label>Grafik<span class="chips" data-set="quality"><button data-v="niedrig">Niedrig</button><button data-v="mittel">Mittel</button><button data-v="hoch">Hoch</button></span></label>
   <label>Ziel-Empfindlichkeit <b id="sensVal"></b><input id="sens" type="range" min="0.2" max="2" step="0.05"></label>
-  <label>Zielhilfe (Flugbahn)<span class="chips" data-set="aimHelp"><button data-v="aus">Aus</button><button data-v="kurz">Kurz</button><button data-v="voll">Voll</button></span></label>
+  <label>Ziellinie (ohne Wind)<span class="chips" data-set="aimHelp"><button data-v="aus">Aus</button><button data-v="kurz">Kurz</button><button data-v="voll">Voll</button></span></label>
+  <label>Linienfarbe<span class="chips swatches" data-set="lineColor"><button data-v="rot" style="--c:#ff2a2a">Rot</button><button data-v="gelb" style="--c:#ffe23a">Gelb</button><button data-v="gruen" style="--c:#3cff5a">Grün</button><button data-v="cyan" style="--c:#2ae8ff">Cyan</button><button data-v="magenta" style="--c:#ff3cf0">Magenta</button><button data-v="weiss" style="--c:#ffffff">Weiß</button></span></label>
+  <label>Linienstil<span class="chips" data-set="lineStyle"><button data-v="voll">Durchgezogen</button><button data-v="strich">Gestrichelt</button><button data-v="punkte">Punkte</button></span></label>
+  <label>Zielansicht beim Zielen<span class="chips" data-set="aimCam"><button data-v="true">An</button><button data-v="false">Aus</button></span></label>
   <label>Kamera folgt Geschoss<span class="chips" data-set="follow"><button data-v="true">An</button><button data-v="false">Aus</button></span></label>
   <label>Ton<span class="chips" data-set="sound"><button data-v="true">An</button><button data-v="false">Aus</button></span></label>
   <button class="big" data-act="close-settings">Fertig</button>
+</div></section>
+
+<section id="shop" class="screen hidden"><div class="panel shop">
+  <h2>🏰 Burgverwaltung – <span id="shopName"></span></h2>
+  <div class="stats">
+    <span>💰 <b id="sGold"></b> Gold</span><span>👥 <b id="sPeople"></b> Leute</span><span><b id="sMoodIcon"></b> Stimmung <b id="sMood"></b> (<i id="sMoodWord"></i>)</span>
+  </div>
+  <label>Steuersatz <b id="sTaxVal"></b><input id="sTax" type="range" min="0" max="80" step="5"></label>
+  <p class="tiny" id="sForecast"></p>
+  <div class="ammo" id="sAmmo"></div>
+  <div class="items" id="sItems"></div>
+  <p class="tiny" id="sMsg">&nbsp;</p>
+  <button class="big" data-act="close-shop">Fertig – zurück zum Zielen</button>
 </div></section>
 
 <section id="help" class="screen hidden"><div class="panel help">
   <h2>Anleitung</h2>
   <p><b>Ziel:</b> Triff den König im Bergfried der gegnerischen Burg, zerstöre die Hälfte ihrer Steine oder alle ihre Waffen.</p>
   <p><b>Zielen:</b> Im runden Feld ziehen: hoch/runter = Winkel, links/rechts = Seite. Je weiter du ziehst, desto schneller dreht das Geschütz – nahe der Mitte passiert nichts (Totzone). Mit ▲▼◀▶ fein in kleinen Schritten. Kraft mit dem Balken (ziehen) oder ＋/－.</p>
-  <p><b>Waffen:</b> Kanone = schnell und flach. Katapult = hoher Bogen über die Mauer. Mörser = steile Sprengbombe, kostet 40 Gold. Gold gibt es jede Runde – je heiler die Burg, desto mehr.</p>
-  <p><b>Wind:</b> Der Pfeil oben zeigt die Windrichtung aus deiner Sicht. Steine fliegen weiter mit, Kugeln weniger.</p>
-  <p><b>Kamera:</b> Mit einem Finger drehen, mit zwei Fingern zoomen und verschieben. 🎥 wechselt Ansicht: Geschütz → Übersicht → Gegner.</p>
+  <p><b>Waffen:</b> Kanone = schnell und flach. Katapult = hoher Bogen über die Mauer. Mörser = steile Sprengbombe. Jeder Schuss braucht Munition (Zahl auf dem Waffenknopf).</p>
+  <p><b>Burgverwaltung 🛒:</b> Steuern bringen jede Runde Gold – hohe Steuern machen das Volk wütend. Zufriedenes Volk wächst, wütendes wandert ab. Sinkt die Stimmung auf 0, gibt es einen Aufstand und du verlierst! Im Laden: Munition, Mauern ausbessern, Waffen reparieren, Volksfest.</p>
+  <p><b>Wind:</b> Die Ziellinie zeigt die Flugbahn <i>ohne</i> Wind. Den Wind (Pfeil oben) musst du selbst einschätzen. Steine fliegen weiter mit, Kugeln weniger.</p>
+  <p><b>Kamera:</b> 🎥 wechselt: Zielansicht (über der Waffe) → Burg → Übersicht → Gegner. In der Zielansicht: 1 Finger = Blick leicht schwenken, 2 Finger = zoomen. Sonst: 1 Finger drehen, 2 Finger zoomen und verschieben.</p>
   <p><b>PC:</b> Maus ziehen = drehen, Rad = Zoom, Rechtsklick ziehen = verschieben. Pfeiltasten = zielen, W/S = Kraft, Leertaste = Feuer, 1–3 = Waffe.</p>
   <button class="big" data-act="close-help">Verstanden</button>
 </div></section>

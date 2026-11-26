@@ -1,2 +1,8 @@
 node_modules/
 *.log
+*.apk
+*.idsig
+*.jks
+keystore/
+.storepass
+android/work-apk/

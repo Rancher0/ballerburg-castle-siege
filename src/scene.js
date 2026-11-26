@@ -34,10 +34,14 @@ export class Scene3D {
     this.stoneMap = stoneTexture();
     this.fx = []; this.debris = [];
     this.setQuality(quality);
-    this.trajLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: 0xffe27a, dashSize: 0.6, gapSize: 0.4, transparent: true, opacity: 0.95, depthTest: false }));
-    this.trajLine.renderOrder = 10; this.trajLine.frustumCulled = false; this.scene.add(this.trajLine);
-    const ringG = new THREE.RingGeometry(0.9, 1.25, 28); ringG.rotateX(-Math.PI / 2);
-    this.marker = new THREE.Mesh(ringG, new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.8, depthTest: false }));
+    // Ziellinie: Röhre (Kern) + dunkler Rand, immer sichtbar (depthTest aus), Farbe/Stil einstellbar
+    this.trajCore = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0xff2a2a, depthTest: false, transparent: true, opacity: 0.95 }));
+    this.trajEdge = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0x000000, depthTest: false, transparent: true, opacity: 0.45, side: THREE.BackSide }));
+    this.trajEdge.renderOrder = 9; this.trajCore.renderOrder = 10;
+    for (const m of [this.trajEdge, this.trajCore]) { m.frustumCulled = false; m.visible = false; this.scene.add(m); }
+    this.lineStyle = { color: 0xff2a2a, style: 'voll' };
+    const ringG = new THREE.RingGeometry(0.9, 1.35, 32); ringG.rotateX(-Math.PI / 2);
+    this.marker = new THREE.Mesh(ringG, new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }));
     this.marker.renderOrder = 11; this.scene.add(this.marker); this.marker.visible = false;
   }
   setQuality(quality) {
@@ -247,14 +251,24 @@ export class Scene3D {
     pos.needsUpdate = true;
     flag.rotation.y = -Math.atan2(wind.z, wind.x || 1e-4);
   }
+  setLineStyle(color, style) {
+    this.lineStyle = { color, style };
+    this.trajCore.material.color.setHex(color); this.marker.material.color.setHex(color);
+    // dunkler Rand bei hellen Farben, heller Rand bei Weiß nicht nötig
+    this.trajEdge.material.color.setHex(0x000000);
+  }
   showTrajectory(pts, frac) {
-    if (!pts || frac <= 0) { this.trajLine.visible = false; this.marker.visible = false; return; }
+    if (!pts || frac <= 0) { this.trajCore.visible = this.trajEdge.visible = false; this.marker.visible = false; return; }
     const n = Math.max(2, Math.floor(pts.length * frac));
-    const arr = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) arr.set([pts[i].x, pts[i].y, pts[i].z], i * 3);
-    this.trajLine.geometry.dispose(); this.trajLine.geometry = new THREE.BufferGeometry(); this.trajLine.geometry.setAttribute('position', new THREE.BufferAttribute(arr, 3));
-    this.trajLine.computeLineDistances(); this.trajLine.visible = true;
-    if (frac >= 1) { const e = pts[pts.length - 1]; this.marker.position.set(e.x, e.y + 0.08, e.z); this.marker.visible = true; } else this.marker.visible = false;
+    const dist = this.camera.position.distanceTo(new THREE.Vector3(pts[0].x, pts[0].y, pts[0].z));
+    const r = 0.09 + Math.min(0.1, dist * 0.003);                  // dicker, gut lesbar
+    const st = this.lineStyle.style;
+    const keep = i => st === 'voll' ? true : st === 'strich' ? (i % 6) < 4 : (i % 4) === 0;
+    this.trajCore.geometry.dispose(); this.trajEdge.geometry.dispose();
+    this.trajCore.geometry = tubeGeo(pts, n, r * (st === 'punkte' ? 1.6 : 1), keep);
+    this.trajEdge.geometry = tubeGeo(pts, n, r * (st === 'punkte' ? 1.6 : 1) + 0.06, keep);
+    this.trajCore.visible = this.trajEdge.visible = true;
+    if (frac >= 1) { const e = pts[pts.length - 1]; this.marker.position.set(e.x, e.y + 0.1, e.z); this.marker.visible = true; } else this.marker.visible = false;
   }
   render() { this.renderer.render(this.scene, this.camera); }
 }
@@ -269,5 +283,26 @@ function mergeGeos(geos, colors) {
   });
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return g;
+}
+
+// Röhre aus Segmenten (6-eckiger Querschnitt). keep(i) entscheidet, ob Segment i gezeichnet wird (Strich/Punkte).
+function tubeGeo(pts, n, r, keep) {
+  const pos = [], idx = [], S = 6;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3(), u = new THREE.Vector3(), w = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < n - 1; i++) {
+    if (!keep(i)) continue;
+    a.set(pts[i].x, pts[i].y, pts[i].z); b.set(pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
+    d.subVectors(b, a); if (d.lengthSq() < 1e-8) continue; d.normalize();
+    u.crossVectors(d, Math.abs(d.y) > 0.95 ? new THREE.Vector3(1, 0, 0) : up).normalize(); w.crossVectors(d, u).normalize();
+    const base = pos.length / 3;
+    for (const c of [a, b]) for (let k = 0; k < S; k++) {
+      const t = k / S * Math.PI * 2, cx = Math.cos(t) * r, cy = Math.sin(t) * r;
+      pos.push(c.x + u.x * cx + w.x * cy, c.y + u.y * cx + w.y * cy, c.z + u.z * cx + w.z * cy);
+    }
+    for (let k = 0; k < S; k++) { const k2 = (k + 1) % S; idx.push(base + k, base + S + k, base + k2, base + k2, base + S + k, base + S + k2); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
   return g;
 }

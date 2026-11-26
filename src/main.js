@@ -1,5 +1,6 @@
 // Ballerburg 3D – Einstieg: Menüs, HUD, Touch-/Maus-/Tastatursteuerung, Hauptschleife.
-import { DEFAULT_SETTINGS, WEAPONS, WEAPON_ORDER } from './config.js';
+import { DEFAULT_SETTINGS, WEAPONS, WEAPON_ORDER, SHOP, ECONOMY, LINE_COLORS } from './config.js';
+import { forecast, moodWord, moodIcon } from './economy.js';
 import { Scene3D } from './scene.js';
 import { CameraRig } from './camera.js';
 import { Battle } from './game.js';
@@ -15,12 +16,16 @@ setSound(settings.sound);
 const canvas = $('gl');
 const gfx = new Scene3D(canvas, settings.quality);
 const rig = new CameraRig(gfx.camera, canvas);
-let battle = null, lastOpts = null, paused = false, camMode = 0, rotateOk = false;
+let battle = null, lastOpts = null, paused = false, rotateOk = false;
+const CAM_MODES = ['ziel', 'burg', 'uebersicht', 'gegner'];
+const CAM_NAMES = { ziel: 'Zielansicht', burg: 'Burgansicht', uebersicht: 'Übersicht', gegner: 'Gegnerburg' };
+const IS_APP = location.host === 'appassets.androidplatform.net';
+gfx.setLineStyle(LINE_COLORS[settings.lineColor] ?? LINE_COLORS.rot, settings.lineStyle);
 
 const App = window.App = { gfx, rig, settings, get battle() { return battle; }, start, WEAPONS };
 
 // ---------- Bildschirme ----------
-const screens = ['menu', 'pause', 'settings', 'help', 'end'];
+const screens = ['menu', 'pause', 'settings', 'help', 'end', 'shop'];
 let returnTo = 'menu';
 function show(id) { for (const s of screens) $(s).classList.toggle('hidden', s !== id); }
 function hideAll() { for (const s of screens) $(s).classList.add('hidden'); }
@@ -33,24 +38,35 @@ function demo() {
   $('hud').classList.add('hidden'); show('menu');
 }
 function start(opts) {
-  battle?.dispose(); paused = false; camMode = 0;
-  lastOpts = { difficulty: settings.difficulty, follow: settings.follow, ...opts };
+  battle?.dispose(); paused = false;
+  lastOpts = { difficulty: settings.difficulty, follow: settings.follow, layout: settings.layout, aimCam: settings.aimCam, ...opts };
   battle = new Battle(gfx, rig, lastOpts, {
     onHud: hud, onTurn: onTurn, onLine: line, onToast: toast, onEnd: onEnd,
   });
   hideAll(); $('hud').classList.remove('hidden'); buildWeaponButtons(); hud();
   return battle;
 }
-function onTurn(P) {
-  $('turnText').textContent = battle.mode === 'ai' ? (P.human ? 'Du bist dran' : 'Der Computer zielt …') : `${P.name} ist dran`;
-  camMode = 0;
+function onTurn(P, B) {
+  B.camMode = settings.aimCam ? 'ziel' : 'burg';
+  if (P.human) B.viewWeapon();
+  const st = B.lastSettle;
+  if (st && P.human) toast(`${P.name}: +${st.income} Gold Steuern${st.events.length ? ' · ' + st.events.join(' · ') : ''}`, false);
+}
+function turnText() {
+  const B = battle, P = B.cur, ai = B.mode === 'ai';
+  const who = ai ? (P.human ? 'Du' : 'Computer') : P.name;
+  if (B.phase === 'flight') return `💥 ${who}: ${WEAPONS[B.proj?.wp.id || P.weapon].name} feuert …`;
+  if (B.phase === 'settle') return '⏳ Einschlag …';
+  if (B.phase === 'ai') return 'Der Computer zielt …';
+  if (B.phase === 'over') return 'Spielende';
+  return ai ? 'Du bist dran' : `${P.name} ist dran`;
 }
 let lineT = 0, toastT = 0;
 function line(t) { const el = $('line'); el.textContent = '„' + t + '“'; el.classList.remove('hidden'); lineT = 3.2; }
-function toast(t) { const el = $('toast'); el.textContent = t; el.classList.remove('hidden'); toastT = 2.4; }
+function toast(t, bad = true) { const el = $('toast'); el.textContent = t; el.classList.toggle('good', !bad); el.classList.remove('hidden'); toastT = 2.8; }
 function onEnd(r) {
   const youWon = battle.mode === 'ai' ? r.winner.side === 0 : true;
-  const why = { koenig: 'Der König wurde getroffen.', burg: 'Die Burg ist eingestürzt.', waffen: 'Alle Waffen sind zerstört.' }[r.reason];
+  const why = { koenig: 'Der König wurde getroffen.', burg: 'Die Burg ist eingestürzt.', waffen: 'Alle Waffen sind zerstört.', aufstand: `Das Volk von ${r.loser.name} hat einen Aufstand gemacht!` }[r.reason];
   $('endTitle').textContent = battle.mode === 'ai' ? (youWon ? '🏆 Sieg!' : '💀 Niederlage') : `🏆 ${r.winner.name} gewinnt!`;
   $('endText').innerHTML = `${why}<br>Runden: ${r.round} · Schüsse: ${r.stats.shots[0]} / ${r.stats.shots[1]} · zerstörte Blöcke: ${r.stats.destroyed[0]} / ${r.stats.destroyed[1]}`;
   (youWon ? SFX.win : SFX.lose)();
@@ -62,7 +78,7 @@ function buildWeaponButtons() {
   const box = $('weapons'); box.innerHTML = '';
   for (const id of WEAPON_ORDER) {
     const w = WEAPONS[id], b = document.createElement('button');
-    b.dataset.w = id; b.innerHTML = `<i>${w.icon}</i><span>${w.name}</span><small>${w.cost ? w.cost + ' Gold' : 'kostenlos'}</small>`;
+    b.dataset.w = id; b.innerHTML = `<i>${w.icon}</i><span>${w.name}<b class="am"></b></span><small></small>`;
     b.addEventListener('click', () => { if (battle?.selectWeapon(id)) SFX.click(); });
     box.appendChild(b);
   }
@@ -71,14 +87,20 @@ function hud() {
   if (!battle || battle.phase === 'idle') return;
   const P = battle.cur;
   battle.players.forEach((p, i) => {
-    $('n' + i).textContent = p.name; $('g' + i).textContent = '💰 ' + p.gold;
+    $('n' + i).textContent = p.name; $('g' + i).textContent = '💰 ' + p.econ.gold;
+    $('m' + i).textContent = `${moodIcon(p.econ.mood)} ${Math.round(p.econ.mood)} · 👥 ${p.econ.people} · Steuer ${p.econ.tax}%`;
     $('i' + i).style.width = Math.round(battle.integrity(p) * 100) + '%';
     document.querySelector('.pl' + i).classList.toggle('active', battle.turn === i);
   });
   for (const b of $('weapons').children) {
     const id = b.dataset.w, w = P.weapons[id];
     b.classList.toggle('on', P.weapon === id); b.classList.toggle('dead', !w.alive);
+    const am = P.econ.ammo[id]; b.querySelector('.am').textContent = '×' + am; b.classList.toggle('empty', am <= 0);
+    b.querySelector('small').textContent = !w.alive ? 'zerstört' : am <= 0 ? `keine ${WEAPONS[id].ammoName}` : `${am} ${WEAPONS[id].ammoName}`;
   }
+  $('turnText').textContent = turnText();
+  $('shopBtn').style.visibility = P.human && battle.phase === 'aim' ? 'visible' : 'hidden';
+  $('aimPanel').classList.toggle('aimcam', battle.camMode === 'ziel');
   $('weapons').style.visibility = P.human ? 'visible' : 'hidden';
   // Wind aus Sicht des Schützen (rechts = Richtung Gegner)
   const s = P.side === 0 ? 1 : -1, wx = battle.wind.x * s, wz = battle.wind.z * s;
@@ -154,10 +176,36 @@ function aimInput(dt) {
 // ---------- Kamera-Taste ----------
 $('camBtn').addEventListener('click', () => {
   if (!battle || battle.phase === 'idle') return;
-  camMode = (camMode + 1) % 3;
-  [() => battle.viewWeapon(), () => battle.viewOverview(), () => battle.viewEnemy()][camMode]();
+  const next = CAM_MODES[(CAM_MODES.indexOf(battle.camMode) + 1) % CAM_MODES.length];
+  battle.setCamMode(next); toast('🎥 ' + CAM_NAMES[next], false); hud();
 });
 $('pauseBtn').addEventListener('click', () => { paused = true; returnTo = 'pause'; show('pause'); });
+$('aimFold').addEventListener('click', () => { const f = $('aimPanel').classList.toggle('folded'); localStorage.setItem(STORE + '_fold', f ? '1' : ''); });
+if (localStorage.getItem(STORE + '_fold')) $('aimPanel').classList.add('folded');
+
+// ---------- Laden / Burgverwaltung ----------
+$('shopBtn').addEventListener('click', () => { if (canAim()) openShop(); });
+function openShop() { paused = true; renderShop(); show('shop'); }
+function renderShop(msg) {
+  const P = battle.cur, E = P.econ;
+  $('shopName').textContent = P.name;
+  $('sGold').textContent = E.gold; $('sPeople').textContent = E.people; $('sMood').textContent = Math.round(E.mood);
+  $('sMoodIcon').textContent = moodIcon(E.mood); $('sMoodWord').textContent = moodWord(E.mood);
+  $('sTax').value = E.tax; $('sTaxVal').textContent = E.tax + ' %';
+  const f = forecast(E, battle.integrity(P));
+  $('sForecast').textContent = `Nächste Runde: +${f.income} Gold, Stimmung ${f.moodDelta >= 0 ? '+' : ''}${f.moodDelta}` + (E.mood + f.moodDelta <= 15 ? ' – Vorsicht, Aufstand droht!' : '');
+  $('sAmmo').innerHTML = WEAPON_ORDER.map(id => `${WEAPONS[id].icon} ${WEAPONS[id].ammoName}: <b>${E.ammo[id]}</b>${P.weapons[id].alive ? '' : ' (Waffe zerstört)'}`).join(' · ');
+  const box = $('sItems'); box.innerHTML = '';
+  for (const it of SHOP) {
+    const b = document.createElement('button'), why = battle.canBuy(P, it);
+    b.innerHTML = `<span>${it.icon} ${it.name}</span><b>${it.price} Gold</b>${why ? `<small>${why}</small>` : ''}`;
+    b.disabled = !!why;
+    b.addEventListener('click', () => { const r = battle.buy(P, it.id); SFX.click(); renderShop(r.msg); hud(); });
+    box.appendChild(b);
+  }
+  $('sMsg').textContent = msg || '\u00a0';
+}
+$('sTax').addEventListener('input', e => { battle.setTax(battle.cur, +e.target.value); renderShop(); });
 
 // ---------- Menü-Aktionen ----------
 document.body.addEventListener('click', e => {
@@ -171,6 +219,7 @@ document.body.addEventListener('click', e => {
   else if (act === 'help') { returnTo = $('pause').classList.contains('hidden') ? 'menu' : 'pause'; show('help'); }
   else if (act === 'close-help') show(returnTo === 'pause' && battle?.phase !== 'idle' ? 'pause' : 'menu');
   else if (act === 'resume') { paused = false; hideAll(); }
+  else if (act === 'close-shop') { paused = false; hideAll(); battle.aimDirty = true; }
   else if (act === 'quit') { paused = false; demo(); }
   else if (act === 'again') start(lastOpts);
   else if (act === 'rotate-ok') { rotateOk = true; checkRotate(); }
@@ -183,6 +232,8 @@ document.querySelectorAll('[data-set]').forEach(group => group.querySelectorAll(
   if (k === 'sound') setSound(v);
   if (k === 'follow' && battle) battle.opts.follow = v;
   if (k === 'aimHelp' && battle) battle.aimDirty = true;
+  if (k === 'lineColor' || k === 'lineStyle') { gfx.setLineStyle(LINE_COLORS[settings.lineColor], settings.lineStyle); if (battle) battle.aimDirty = true; }
+  if (k === 'aimCam' && battle && battle.phase !== 'idle') { battle.camMode = v ? 'ziel' : 'burg'; }
 })));
 $('sens').addEventListener('input', e => { settings.sensitivity = +e.target.value; $('sensVal').textContent = settings.sensitivity.toFixed(2) + '×'; save(); });
 function syncSettings() {
@@ -223,4 +274,14 @@ resize(); syncSettings(); demo();
 $('loading').classList.add('hidden');
 requestAnimationFrame(frame);
 
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+// Android-Zurück-Taste (APK): Overlays schließen bzw. Pause öffnen; false = App beenden
+window.__onBack = () => {
+  if (!$('shop').classList.contains('hidden')) { paused = false; hideAll(); return true; }
+  if (!$('settings').classList.contains('hidden') || !$('help').classList.contains('hidden')) { show(returnTo === 'pause' && battle?.phase !== 'idle' ? 'pause' : 'menu'); return true; }
+  if (!$('pause').classList.contains('hidden')) { paused = false; hideAll(); return true; }
+  if (battle && battle.phase !== 'idle' && $('end').classList.contains('hidden')) { paused = true; returnTo = 'pause'; show('pause'); return true; }
+  if (battle && battle.phase !== 'idle') { demo(); return true; }
+  return false;
+};
+window.__onPause = () => { if (battle && battle.phase !== 'idle' && $('menu').classList.contains('hidden') && $('end').classList.contains('hidden')) { paused = true; show('pause'); } };
+if (!IS_APP && 'serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

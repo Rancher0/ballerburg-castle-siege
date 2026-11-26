@@ -1,50 +1,57 @@
 // Ballerburg 3D – Spiellogik: Burgen aufbauen, Züge, Schuss, Einschlag, Sieg, Computergegner.
-import { WORLD, WEAPONS, WEAPON_ORDER, ECONOMY, RULES, PLAYER_NAMES_AI, PLAYER_NAMES_HOT } from './config.js';
-import { castlePlan, toWorld, facingYaw, muzzle } from './castle.js';
+import { WORLD, WEAPONS, WEAPON_ORDER, ECONOMY, SHOP, RULES, PLAYER_NAMES_AI, PLAYER_NAMES_HOT } from './config.js';
+import { castlePlan, pickLayout, toWorld, facingYaw, muzzle } from './castle.js';
+import { newEconomy, settleTurn } from './economy.js';
 import { createWorld, makeBlock, makeKing, explode, allAsleep, pointInBox, CANNON } from './physics.js';
 import { launchVelocity, stepProjectile, simulate, solveShot, clamp } from './ballistics.js';
 import { SFX } from './sound.js';
 import { LINES, pick } from './lines.js';
 
 const DT = 1 / 120;
+// Zielansicht: Abstand hinter / über / seitlich der Waffe
+const AIM_CAM = { kanone: { back: 3.6, up: 2.6, side: 1.3 }, katapult: { back: 4.5, up: 4.5, side: 1.6 }, moerser: { back: 3.4, up: 2.6, side: 1.3 } };
 const AI_NOISE = { leicht: { e: 6, y: 4, p: 0.09, learn: 0.8 }, mittel: { e: 3.5, y: 2.5, p: 0.05, learn: 0.7 }, schwer: { e: 1.6, y: 1.1, p: 0.025, learn: 0.55 } };
 
 export class Battle {
   constructor(gfx, rig, opts, hooks = {}) {
     this.gfx = gfx; this.rig = rig; this.opts = opts; this.hooks = hooks;
     this.mode = opts.mode; // 'ai' | 'hot'
-    this.plan = castlePlan();
     const q = gfx.q;
     const { world } = createWorld(q.solverIt); this.world = world;
-    this.players = [0, 1].map(side => this.buildSide(side));
+    const layouts = opts.layouts || [0, 1].map(() => pickLayout(opts.layout));
+    this.players = [0, 1].map(side => this.buildSide(side, castlePlan(layouts[side])));
+    this.camMode = opts.aimCam === false ? 'burg' : 'ziel';
     this.allBlocks = [...this.players[0].blocks, ...this.players[1].blocks];
     this.turn = 0; this.round = 1; this.phase = 'aim'; this.proj = null; this.acc = 0;
     this.stats = { shots: [0, 0], destroyed: [0, 0] };
     this.newWind();
     this.startTurn(true);
   }
-  buildSide(side) {
+  buildSide(side, plan) {
     const names = this.mode === 'ai' ? PLAYER_NAMES_AI : PLAYER_NAMES_HOT;
-    const P = { side, name: names[side], human: this.mode === 'hot' || side === 0, gold: ECONOMY.startGold, weapon: 'kanone', aim: {}, weapons: {}, blocks: [], keyIndex: new Map() };
-    this.plan.blocks.forEach((bl, i) => {
+    const P = { side, plan, name: names[side], human: this.mode === 'hot' || side === 0, econ: newEconomy(), weapon: 'kanone', aim: {}, weapons: {}, blocks: [], keyIndex: new Map() };
+    plan.blocks.forEach((bl, i) => {
       const p = toWorld(side, bl.u, bl.v, bl.l + 0.5);
-      const b = makeBlock(this.world, p); b.origin = p; b.side = side; P.blocks.push(b); P.keyIndex.set(`${bl.u},${bl.v},${bl.l}`, b);
+      const b = makeBlock(this.world, p); b.origin = p; b.side = side; b.bl = bl; P.blocks.push(b); P.keyIndex.set(`${bl.u},${bl.v},${bl.l}`, b);
     });
-    const vis = this.gfx.buildCastle(side, this.plan.blocks, this.plan, toWorld);
+    const vis = this.gfx.buildCastle(side, plan.blocks, plan, toWorld);
     P.mesh = vis.mesh; P.flag = vis.flag;
-    const kp = toWorld(side, this.plan.king.u, this.plan.king.v, this.plan.king.y);
+    const kp = toWorld(side, plan.king.u, plan.king.v, plan.king.y);
     P.king = { body: makeKing(this.world, kp), mesh: this.gfx.makeKing(side), origin: { x: kp.x, y: kp.y + 0.5, z: kp.z }, dead: false };
-    P.king.body.addEventListener('collide', e => { const v = e.contact.getImpactVelocityAlongNormal(); if (Math.abs(v) > 7 && this.phase !== 'aim') this.killKing(P); });
+    P.king.body.addEventListener('collide', e => { const v = e.contact.getImpactVelocityAlongNormal(); if (Math.abs(v) > 9 && this.phase !== 'aim') this.killKing(P); });
     for (const id of WEAPON_ORDER) {
-      const w = this.plan.weapons[id], pos = toWorld(side, w.u, w.v, w.y);
-      const g = this.gfx.makeWeapon(id, side); g.position.set(pos.x, pos.y, pos.z);
-      if (id === 'katapult') g.scale.setScalar(0.75);
-      const wp = WEAPONS[id];
       P.aim[id] = { elev: id === 'kanone' ? 12 : id === 'katapult' ? 50 : 65, yaw: 0, power: 0.75 };
-      P.weapons[id] = { g, pos, alive: true, support: w.support.map(k => P.keyIndex.get(k.join(','))).filter(Boolean), arm: 0 };
-      this.gfx.poseWeapon(g, facingYaw(side) + P.aim[id].yaw, P.aim[id].elev);
+      this.makeWeaponVis(P, id);
     }
     return P;
+  }
+  makeWeaponVis(P, id) {
+    const w = P.plan.weapons[id], pos = toWorld(P.side, w.u, w.v, w.y);
+    const old = P.weapons[id]; if (old) this.gfx.scene.remove(old.g);
+    const g = this.gfx.makeWeapon(id, P.side); g.position.set(pos.x, pos.y, pos.z);
+    if (id === 'katapult') g.scale.setScalar(0.75);
+    P.weapons[id] = { g, pos, alive: true, support: w.support.map(k => P.keyIndex.get(k.join(','))).filter(Boolean), arm: 0 };
+    this.gfx.poseWeapon(g, facingYaw(P.side) + P.aim[id].yaw, P.aim[id].elev);
   }
   get cur() { return this.players[this.turn]; }
   get foe() { return this.players[1 - this.turn]; }
@@ -68,11 +75,76 @@ export class Battle {
     const P = this.cur; if (!P.weapons[id]?.alive || this.phase !== 'aim') return false;
     P.weapon = id; this.aimDirty = true; this.viewWeapon(); this.hooks.onHud?.(); return true;
   }
-  canAfford(P, id) { return P.gold >= WEAPONS[id].cost; }
+  hasAmmo(P, id) { return P.econ.ammo[id] > 0; }
+  usable(P, id) { return P.weapons[id].alive && this.hasAmmo(P, id); }
+  // --- Laden / Wirtschaft ---
+  setTax(P, t) { P.econ.tax = clamp(Math.round(t), 0, ECONOMY.maxTax); this.hooks.onHud?.(); }
+  canBuy(P, item) {
+    if (P.econ.gold < item.price) return 'Zu wenig Gold';
+    if (item.kind === 'repairWeapon' && !this.repairableWeapon(P)) return 'Keine reparierbare Waffe';
+    if (item.kind === 'repairWall' && !this.restoreBlocks(P, 1, true)) return 'Nichts auszubessern';
+    if (item.kind === 'fest' && P.econ.mood >= 100) return 'Volk ist schon begeistert';
+    return null;
+  }
+  buy(P, itemId) {
+    const item = SHOP.find(i => i.id === itemId); if (!item) return { ok: false, msg: 'Unbekannt' };
+    const why = this.canBuy(P, item); if (why) return { ok: false, msg: why };
+    let msg = '';
+    if (item.kind === 'ammo') { P.econ.ammo[item.weapon] += item.qty; msg = `${item.name} gekauft`; }
+    else if (item.kind === 'repairWall') { const n = this.restoreBlocks(P, item.qty); msg = `${n} Steine wieder eingesetzt`; }
+    else if (item.kind === 'repairWeapon') { const id = this.repairableWeapon(P); this.makeWeaponVis(P, id); msg = `${WEAPONS[id].name} repariert`; }
+    else if (item.kind === 'fest') { P.econ.mood = Math.min(100, P.econ.mood + item.mood); msg = 'Das Volk feiert!'; }
+    P.econ.gold -= item.price;
+    if (!this.usable(P, P.weapon)) { const alt = WEAPON_ORDER.find(id => this.usable(P, id)); if (alt) P.weapon = alt; }
+    this.aimDirty = true; this.hooks.onHud?.();
+    return { ok: true, msg };
+  }
+  repairableWeapon(P) {
+    return WEAPON_ORDER.find(id => !P.weapons[id].alive && P.weapons[id].support.every(b => !this.isLoose(b)) && P.weapons[id].support.length === P.plan.weapons[id].support.length);
+  }
+  // Lose/zerstörte Steine von unten nach oben wieder an ihren Platz setzen (nur mit Unterbau und freiem Platz)
+  restoreBlocks(P, n, dry = false) {
+    let done = 0;
+    const cand = P.blocks.filter(b => this.isLoose(b)).sort((a, b) => a.bl.l - b.bl.l);
+    for (const b of cand) {
+      if (done >= n) break;
+      const { u, v, l } = b.bl;
+      const below = l === 0 ? null : P.keyIndex.get(`${u},${v},${l - 1}`);
+      const kingCell = l === 1 && u === P.plan.king.u && v === P.plan.king.v;
+      if (l > 0 && !(kingCell ? !P.king.dead : below && !this.isLoose(below))) continue;
+      const o = b.origin, blockers = [];
+      let occupied = false;
+      for (const q of [...this.allBlocks, this.players[0].king.body, this.players[1].king.body]) {
+        if (q === b || !q.world) continue;
+        if (Math.abs(q.position.x - o.x) < 0.9 && Math.abs(q.position.y - o.y) < 0.9 && Math.abs(q.position.z - o.z) < 0.9) {
+          if (q.origin && this.isLoose(q)) blockers.push(q); else { occupied = true; break; }
+        }
+      }
+      if (occupied) continue;
+      done++;
+      if (dry) return 1;
+      for (const q of blockers) this.world.removeBody(q);   // Schutt wegräumen
+      if (!b.world) this.world.addBody(b);
+      b.position.set(o.x, o.y, o.z); b.quaternion.set(0, 0, 0, 1); b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0);
+      b.previousPosition.copy(b.position); b.interpolatedPosition.copy(b.position); b.previousQuaternion.copy(b.quaternion); b.interpolatedQuaternion.copy(b.quaternion);
+      b.linearDamping = 0.2; b.angularDamping = 0.4; b.aabbNeedsUpdate = true; b.sleep(); b._hidden = false; b._synced = false;
+    }
+    return done;
+  }
+  aiEconomy(P) {
+    const E = P.econ, buy = id => this.buy(P, id).ok;
+    E.tax = E.mood < 40 ? 15 : E.mood > 70 ? 40 : 30;
+    if (E.mood < 25 && E.gold >= 40) buy('fest');
+    if (!WEAPON_ORDER.every(id => P.weapons[id].alive) && E.gold >= 80) buy('rep_weapon');
+    if (E.ammo.kanone < 3 && E.gold >= 15) buy('ammo_kanone');
+    if (E.ammo.katapult < 3 && E.gold >= 10) buy('ammo_katapult');
+    if (E.ammo.moerser < 1 && E.gold >= 60) buy('ammo_moerser');
+    if (this.integrity(P) < 0.85 && E.gold >= 70) buy('rep_wall');
+  }
   // --- Flugbahn / Zielhilfe ---
   shotParams(P = this.cur) {
     const a = this.aimOf(P), wp = WEAPONS[P.weapon], yaw = this.absYaw(P, a);
-    return { wp, origin: muzzle(P.side, this.plan, P.weapon, yaw, a.elev), vel: launchVelocity(wp, a.elev, yaw, a.power), yaw, a };
+    return { wp, origin: muzzle(P.side, P.plan, P.weapon, yaw, a.elev), vel: launchVelocity(wp, a.elev, yaw, a.power), yaw, a };
   }
   hitTest(p, t, wp, origin) {
     const r = wp.radius;
@@ -96,23 +168,53 @@ export class Battle {
   }
   preview() {
     const s = this.shotParams();
-    const r = simulate(s.origin, s.vel, this.wind, s.wp, { dt: DT, maxT: 10, sampleEvery: 3, hitTest: (p, t) => this.hitTest(p, t, s.wp, s.origin) });
+    // Ziellinie bewusst OHNE Wind: zeigt die reine Flugbahn, den Wind muss man selbst einschätzen
+    const r = simulate(s.origin, s.vel, { x: 0, z: 0 }, s.wp, { dt: DT, maxT: 10, sampleEvery: 2, hitTest: (p, t) => this.hitTest(p, t, s.wp, s.origin) });
     return r;
   }
   // --- Ablauf ---
   startTurn(first = false) {
     const P = this.cur;
-    if (!first) { P.gold += ECONOMY.incomeBase + Math.round(ECONOMY.incomePerIntact * this.integrity(P)); }
-    if (!P.weapons[P.weapon].alive) P.weapon = WEAPON_ORDER.find(id => P.weapons[id].alive);
+    this.lastSettle = null;
+    if (!first) {
+      this.lastSettle = settleTurn(P.econ, this.integrity(P));
+      if (P.econ.mood <= 0) { this.phase = 'over'; this.hooks.onEnd?.({ winner: this.foe, loser: P, reason: 'aufstand', stats: this.stats, round: this.round }); return; }
+    }
+    if (!P.human) this.aiEconomy(P);
+    // Notration, damit niemand ohne Munition festhängt
+    if (!WEAPON_ORDER.some(id => this.usable(P, id)) && P.econ.gold < 10) { P.econ.ammo.kanone += 2; P.econ.ammo.katapult += 2; this.hooks.onToast?.(`${P.name}: Die Schmiede liefert Notmunition.`); }
+    if (!this.usable(P, P.weapon)) P.weapon = WEAPON_ORDER.find(id => this.usable(P, id)) || WEAPON_ORDER.find(id => P.weapons[id].alive);
     this.phase = 'aim'; this.aimDirty = true;
     this.viewWeapon(first);
-    this.hooks.onTurn?.(P);
+    this.hooks.onTurn?.(P, this);
     this.hooks.onHud?.();
     if (!P.human) { this.phase = 'ai'; this.aiTimer = 0; this.aiPlan = null; this.say(pick(LINES.aiTurn)); }
   }
+  // Zielansicht: knapp hinter und über der aktiven Waffe, Blick entlang des Rohrs zur Gegnerburg
+  aimCamPose(P = this.cur) {
+    const w = P.weapons[P.weapon], a = this.aimOf(P), y = this.absYaw(P, a) * Math.PI / 180;
+    const dx = Math.cos(y), dz = Math.sin(y), sx = -dz, sz = dx;   // s = nach rechts
+    const C = AIM_CAM[P.weapon] || AIM_CAM.kanone;
+    const pos = { x: w.pos.x - dx * C.back + sx * C.side, y: w.pos.y + C.up, z: w.pos.z - dz * C.back + sz * C.side };
+    // nicht in Mauern stecken: so lange anheben, bis frei
+    for (let i = 0; i < 30 && P.blocks.some(b => b.world && Math.abs(b.position.x - pos.x) < 1.1 && Math.abs(b.position.y - pos.y) < 1.1 && Math.abs(b.position.z - pos.z) < 1.1); i++) pos.y += 0.5;
+    const e = clamp(a.elev, 0, 60) * Math.PI / 180;
+    const dist = 60, lift = Math.tan(e) * 11;                // leicht mit dem Winkel nach oben schwenken
+    const look = { x: w.pos.x + dx * dist, y: WORLD.plateau + 1 + lift, z: w.pos.z + dz * dist };
+    return { pos, look };
+  }
+  setCamMode(mode) {
+    this.camMode = mode;
+    if (mode === 'ziel') this.viewWeapon();
+    else if (mode === 'burg') this.viewWeapon();
+    else if (mode === 'uebersicht') this.viewOverview();
+    else this.viewEnemy();
+  }
   viewWeapon(instant = false) {
+    const P = this.cur;
+    if (this.camMode === 'ziel' && P.human) { this.rig.follow = null; this.rig.setFP(this.aimCamPose(P), instant); return; }
     // Blick von hinten-oben über die eigene Burg Richtung Gegner
-    const P = this.cur, s = P.side === 0 ? 1 : -1, w = P.weapons[P.weapon];
+    const s = P.side === 0 ? 1 : -1, w = P.weapons[P.weapon];
     const t = { x: s * (-WORLD.castleX + 12), y: WORLD.plateau + 2, z: w.pos.z * 0.2 };
     this.rig.follow = null;
     this.rig.view(t, (s > 0 ? -Math.PI / 2 : Math.PI / 2) + 0.45, 1.12, 26, instant);
@@ -122,8 +224,10 @@ export class Battle {
   fire() {
     if (this.phase !== 'aim' && this.phase !== 'ai') return false;
     const P = this.cur, wp = WEAPONS[P.weapon];
-    if (!this.canAfford(P, P.weapon)) { this.hooks.onToast?.(`Nicht genug Gold für ${wp.name} (${wp.cost}).`); return false; }
-    P.gold -= wp.cost;
+    if (!P.weapons[P.weapon].alive) { this.hooks.onToast?.(`${wp.name} ist zerstört.`); return false; }
+    if (!this.hasAmmo(P, P.weapon)) { this.hooks.onToast?.(`Keine ${wp.ammoName} mehr – im Laden 🛒 kaufen.`); return false; }
+    P.econ.ammo[P.weapon]--;
+    try { window.Android?.vibrate?.(40); } catch {}
     const s = this.shotParams();
     this.proj = { p: { ...s.origin }, v: { ...s.vel }, wp, origin: s.origin, t: 0, mesh: this.gfx.makeProjectile(wp), owner: P };
     this.proj.mesh.position.set(s.origin.x, s.origin.y, s.origin.z);
@@ -131,7 +235,7 @@ export class Battle {
     this.gfx.smokePuff(s.origin);
     SFX[wp.id]?.();
     if (wp.id === 'katapult') { P.weapons.katapult.arm = 0.001; }
-    if (this.opts.follow !== false) this.rig.follow = this.proj;
+    if (this.opts.follow !== false) { this.rig.leaveFP(); this.rig.follow = this.proj; }
     this.hooks.onHud?.();
     return true;
   }
@@ -180,6 +284,7 @@ export class Battle {
     if (this.hitBefore) {
       const d = this.players.map((P, i) => this.looseCount(P) - this.hitBefore[i]);
       this.stats.destroyed[shooter] += d[1 - shooter];
+      this.players.forEach((P, i) => { P.econ.lostSince += Math.max(0, d[i]); });
       if (d[1 - shooter] >= 8) this.say(pick(this.cur.human ? LINES.bigHit : LINES.aiBigHit));
       else if (d[1 - shooter] > 0) this.say(pick(this.cur.human ? LINES.hit : LINES.aiHit));
       else if (d[shooter] > 0) this.say(pick(LINES.ownHit));
@@ -199,13 +304,14 @@ export class Battle {
   // --- Computer ---
   aiThink() {
     const P = this.cur, F = this.foe, noise = AI_NOISE[this.opts.difficulty] || AI_NOISE.mittel;
-    const alive = WEAPON_ORDER.filter(id => P.weapons[id].alive && this.canAfford(P, id));
+    const alive = WEAPON_ORDER.filter(id => this.usable(P, id));
+    if (!alive.length) { this.aiPlan = { skip: true }; return; }
     let id = alive.includes('moerser') && Math.random() < 0.35 ? 'moerser' : alive.filter(x => x !== 'moerser')[Math.floor(Math.random() * alive.filter(x => x !== 'moerser').length)] || alive[0];
     P.weapon = id;
     const wp = WEAPONS[id], kp = F.king.body.position;
     const target = { x: kp.x, y: kp.y + (id === 'kanone' ? 0.3 : 0.6), z: kp.z };
     const a0 = P.aim[id];
-    const origin = muzzle(P.side, this.plan, id, this.absYaw(P, a0), a0.elev);
+    const origin = muzzle(P.side, P.plan, id, this.absYaw(P, a0), a0.elev);
     const sol = solveShot(wp, origin, target, this.wind, { preferHigh: wp.aiPreferHigh });
     P.aiShots = (P.aiShots || 0) + 1;
     const f = Math.pow(noise.learn, Math.min(6, P.aiShots - 1));
@@ -222,13 +328,15 @@ export class Battle {
     if (this.phase === 'ai') {
       this.aiTimer += dt;
       if (!this.aiPlan && this.aiTimer > 0.9) this.aiThink();
-      if (this.aiPlan) {
+      if (this.aiPlan?.skip) { this.say('Wir haben nichts mehr zum Schießen …'); this.turn = 1 - this.turn; if (this.turn === 0) this.round++; this.newWind(); this.startTurn(); }
+      else if (this.aiPlan) {
         const k = clamp((this.aiTimer - 0.9) / 1.4, 0, 1), e = k * k * (3 - 2 * k), A = this.aimOf(), { from, to } = this.aiPlan;
         A.elev = from.elev + (to.elev - from.elev) * e; A.yaw = from.yaw + (to.yaw - from.yaw) * e; A.power = from.power + (to.power - from.power) * e;
         this.aimDirty = true;
         if (k >= 1 && this.aiTimer > 2.6) this.fire();
       }
     }
+    if (this.phase === 'aim' && this.camMode === 'ziel' && this.cur.human && this.rig.fp) this.rig.setFP(this.aimCamPose(), false);
     if (this.phase === 'flight' && this.proj) {
       const pr = this.proj; this.acc += dt; let hit = null;
       while (this.acc >= DT && !hit) {

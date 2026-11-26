@@ -37,7 +37,7 @@ export function makeBlock(world, pos, mass = 1) {
 export function makeKing(world, pos) {
   // Der König sitzt im Thronsaal: Kollisionskörper = ein Block, trägt den Bergfried mit
   const b = new CANNON.Body({ mass: 1, shape: new CANNON.Box(new CANNON.Vec3(HALF, 0.5, HALF)), linearDamping: 0.2, angularDamping: 0.4, allowSleep: true, sleepSpeedLimit: 0.5, sleepTimeLimit: 0.4 });
-  b.position.set(pos.x, pos.y + 0.5, pos.z); world.addBody(b); b.sleep();
+  b.position.set(pos.x, pos.y + 0.5, pos.z); world.addBody(b);   // wach starten (schläft von selbst ein), sonst fällt die Säule darüber durch
   return b;
 }
 
